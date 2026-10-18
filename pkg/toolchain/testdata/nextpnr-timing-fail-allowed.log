@@ -1,0 +1,193 @@
+Info: Using uarch 'gatemate' for device 'CCGM1A1'
+Info: Using timing mode 'WORST'.
+Info: Using performance mode 'SPEED'.
+
+Info: Parsing CCF file..
+Info: Assign cell region based on attributes..
+Info: Packing constants..
+Info: Running cleanups..
+Info: Packing IOs..
+Info:     Constraining '$iopadmap$top.led' to pad 'IO_SB_B6'.
+Info:     Constraining '$iopadmap$top.clk' to pad 'IO_SB_A8'.
+Info: Insert clocking cells..
+Info: Packing PLLs..
+Info:     PLL fout= 400.0000 MHz (fout error 0.00000% of requested 400.0000 MHz)
+Info: constraining clock net 'clk0' to 400.00 MHz
+Info: Sort BUFGs..
+Info: Packing BUFGs..
+Info: Packing IO SELs..
+Info: Packing misc..
+Info: Packing RAMs..
+Info: Packing SERDES..
+Info: Packing multipliers...
+Info: Packing ADDFs..
+Info: Packing CPEs..
+Info: Removing unused constants..
+Info:     Removed unused VCC cell.
+Info:     Removed unused GND cell.
+Info: Fix cell assigned regions..
+Info: Checksum: 0x60bd0a6b
+
+Info: Device utilisation:
+Info: 	            USR_RSTN:       0/      1     0%
+Info: 	            CPE_COMP:       0/  20480     0%
+Info: 	         CPE_CPLINES:       1/  20480     0%
+Info: 	               IOSEL:       2/    162     1%
+Info: 	                GPIO:       2/    162     1%
+Info: 	               CLKIN:       1/      1   100%
+Info: 	              GLBOUT:       1/      1   100%
+Info: 	                 PLL:       1/      4    25%
+Info: 	            CFG_CTRL:       0/      1     0%
+Info: 	              SERDES:       0/      1     0%
+Info: 	              CPE_LT:      28/  40960     0%
+Info: 	              CPE_FF:      25/  40960     0%
+Info: 	           CPE_RAMIO:       2/  40960     0%
+Info: 	            RAM_HALF:       0/     64     0%
+
+Info: Placed 0 cells based on constraints.
+Info: Creating initial analytic placement for 1 cells, random placement wirelen = 663.
+Info:     at initial placer iter 0, wirelen = 505
+Info:     at initial placer iter 1, wirelen = 505
+Info:     at initial placer iter 2, wirelen = 505
+Info:     at initial placer iter 3, wirelen = 505
+Info: Running main analytical placer, max placement attempts per cell = 10000.
+Info:     at iteration #1, type CPE_LT: wirelen solved = 505, spread = 505, legal = 505; time = 0.00s
+Info: HeAP Placer Time: 0.24s
+Info:   of which solving equations: 0.00s
+Info:   of which spreading cells: 0.00s
+Info:   of which strict legalisation: 0.00s
+
+Info: Running simulated annealing placer for refinement.
+Info:   at iteration #1: temp = 0.000000, timing cost = 4, wirelen = 229
+Info:   at iteration #2: temp = 0.000000, timing cost = 4, wirelen = 229 
+Info: SA placement time 0.00s
+
+Info: Max frequency for clock 'gclk': 688.23 MHz (PASS at 400.00 MHz)
+
+Info: Slack histogram:
+Info:  legend: * represents 1 endpoint(s)
+Info:          + represents [1,1) endpoint(s)
+Info: [  1047,   1052) |************ 
+Info: [  1052,   1057) | 
+Info: [  1057,   1062) | 
+Info: [  1062,   1067) | 
+Info: [  1067,   1072) | 
+Info: [  1072,   1077) | 
+Info: [  1077,   1082) | 
+Info: [  1082,   1087) | 
+Info: [  1087,   1092) | 
+Info: [  1092,   1097) | 
+Info: [  1097,   1102) | 
+Info: [  1102,   1107) | 
+Info: [  1107,   1112) | 
+Info: [  1112,   1117) | 
+Info: [  1117,   1122) | 
+Info: [  1122,   1127) | 
+Info: [  1127,   1132) | 
+Info: [  1132,   1137) |************ 
+Info: [  1137,   1142) | 
+Info: [  1142,   1147) | 
+Info: Checksum: 0xbe8d2d29
+Info: Repacking RAMs..
+Info: Repacking CPEs..
+Info: Remove unused clocking cells..
+Info: Routing multipliers...
+Info: Routing clock nets...
+Info:     routing net 'gclk' to 25 users
+Info: Clock router time 1.97s.
+Info: Running router2...
+Info: Setting up routing resources...
+Info: Running main router loop...
+Info:     iter=1 wires=693 overused=7 overuse=7 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=2 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=3 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=4 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=5 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=6 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=7 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=8 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=9 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=10 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=11 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=12 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=13 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=14 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=15 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=16 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=17 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=18 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=19 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=20 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=21 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=22 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=23 wires=694 overused=6 overuse=6 resources=36 overused=0 overuse=0 archfail=NA
+Info:     iter=24 wires=691 overused=3 overuse=3 resources=27 overused=0 overuse=0 archfail=NA
+Info:     iter=25 wires=700 overused=0 overuse=0 resources=18 overused=0 overuse=0 archfail=0
+Info: Router2 time 2.10s
+Info: Running router1 to check that route is legal...
+
+Info: Routing..
+Info: Setting up routing queue.
+Info: Routing 0 arcs.
+Info:            |   (re-)routed arcs  |   delta    | remaining|       time spent     |
+Info:    IterCnt |  w/ripup   wo/ripup |  w/r  wo/r |      arcs| batch(sec) total(sec)|
+Info:          0 |        0          0 |    0     0 |         0|       0.00       0.00|
+Info: Routing complete.
+Info: Router1 time 0.00s
+Info: Checksum: 0x9083d85a
+
+Info: Critical path report for clock 'gclk' (posedge -> posedge):
+Info:       type curr  total name
+Info:   clk-skew  0.12  0.12 Net gclk (19,107) -> (19,108)
+Info:                          Sink $auto$ff.cc:337:slice$103.CLK_INT
+Info:                          Defined in:
+Info:                               f.v:5.8-5.12
+Info:   clk-to-q  0.59  0.71 Source $auto$ff.cc:337:slice$101.DOUT
+Info:    routing  1.75  2.46 Net c[0] (19,107) -> (19,107)
+Info:                          Sink $auto$alumacc.cc:548:replace_alu$20.slice[1].addf_i.D0_03
+Info:                          Defined in:
+Info:                               f.v:6.14-6.15
+Info:      logic  0.48  2.94 Source $auto$alumacc.cc:548:replace_alu$20.slice[1].addf_i.COUTY1
+Info:    routing  0.00  2.94 Net $auto$alumacc.cc:548:replace_alu$20.CO[1] (19,107) -> (19,108)
+Info:                          Sink $auto$alumacc.cc:548:replace_alu$20.slice[3].addf_i.CINY1
+Info:                          Defined in:
+Info:                               f.v:6.49-6.54
+Info:                               ~/fpga/oss-cad-suite/lib/../share/yosys/gatemate/arith_map.v:37.23-37.25
+Info:      logic  0.51  3.45 Source $auto$alumacc.cc:548:replace_alu$20.slice[3].addf_i.OUT1
+Info:    routing  0.00  3.45 Net $auto$alumacc.cc:548:replace_alu$20.Y[2] (19,108) -> (19,108)
+Info:                          Sink $auto$ff.cc:337:slice$103.DIN
+Info:                          Defined in:
+Info:                               f.v:6.49-6.54
+Info:                               ~/fpga/oss-cad-suite/lib/../share/yosys/gatemate/arith_map.v:33.26-33.27
+Info:      setup  0.10  3.56 Source $auto$ff.cc:337:slice$103.DIN
+Info: 1.68 ns logic, 1.87 ns routing
+
+Warning: Max frequency for clock 'gclk': 281.29 MHz (FAIL at 400.00 MHz)
+
+Info: Slack histogram:
+Info:  legend: * represents 1 endpoint(s)
+Info:          + represents [1,1) endpoint(s)
+Info: [ -1055,  -1023) |*** 
+Info: [ -1023,   -991) | 
+Info: [  -991,   -959) |** 
+Info: [  -959,   -927) |**** 
+Info: [  -927,   -895) | 
+Info: [  -895,   -863) |* 
+Info: [  -863,   -831) |** 
+Info: [  -831,   -799) |* 
+Info: [  -799,   -767) | 
+Info: [  -767,   -735) |* 
+Info: [  -735,   -703) |** 
+Info: [  -703,   -671) | 
+Info: [  -671,   -639) |** 
+Info: [  -639,   -607) | 
+Info: [  -607,   -575) | 
+Info: [  -575,   -543) | 
+Info: [  -543,   -511) |** 
+Info: [  -511,   -479) |* 
+Info: [  -479,   -447) | 
+Info: [  -447,   -415) |**** 
+Info: Update configuration based on routing..
+1 warning, 0 errors
+
+Info: Program finished normally.

@@ -1,0 +1,22 @@
+3. Printing statistics.
+
+=== top ===
+
+        +----------Local Count, excluding submodules.
+        | 
+       11 wires
+      107 wire bits
+        6 public wires
+       30 public wire bits
+        2 ports
+        2 port bits
+       55 cells
+       25   CC_ADDF
+        1   CC_BUFG
+       25   CC_DFF
+        1   CC_IBUF
+        1   CC_LUT2
+        1   CC_OBUF
+        1   CC_PLL
+
+4. Executing JSON backend.

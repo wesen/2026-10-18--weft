@@ -9,3 +9,4 @@ weft-lab/app/dist/
 ttmp/**/scripts/**/build/
 pkg/web/static/lab.html
 .playwright-mcp/
+pkg/emitter/js/weft-hw.mjs

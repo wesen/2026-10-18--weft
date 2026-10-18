@@ -13,6 +13,7 @@ import (
 	"github.com/go-go-golems/glazed/pkg/cmds/values"
 	"github.com/go-go-golems/glazed/pkg/middlewares"
 	"github.com/go-go-golems/glazed/pkg/types"
+	"github.com/wesen/2026-10-18--weft/pkg/board"
 	"github.com/wesen/2026-10-18--weft/pkg/toolchain"
 	"github.com/wesen/2026-10-18--weft/pkg/web"
 )
@@ -95,7 +96,7 @@ func (c *DoctorCommand) RunIntoGlazeProcessor(ctx context.Context, parsed *value
 			return err
 		}
 	default:
-		chip, err := suite.Detect(ctx, "olimex_gatemateevb")
+		chip, err := suite.Detect(ctx, board.GateMateA1EVB.Loader)
 		if err != nil {
 			if err := row("board", false, err.Error()); err != nil {
 				return err

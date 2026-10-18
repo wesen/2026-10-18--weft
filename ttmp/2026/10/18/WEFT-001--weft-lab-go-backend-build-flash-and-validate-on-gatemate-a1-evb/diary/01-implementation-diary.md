@@ -381,3 +381,90 @@ artifacts and provide them the proper APIs for the coding agent and such").
 - Endpoints: `GET /`, `GET /static/runtime.js`, `GET /api/models`, `POST /api/views` (`{version:1}`),
   `GET /api/views/{view}/events`, `POST /api/views/{view}/calls`, `POST …/calls/{call}/cancel`,
   `POST …/calls/{call}/tools/{tool}/result`, `POST …/rpc`. Header `X-Francois-View` on every view call.
+
+## Step 5: P3 — GateMate profile, the nextpnr PLL port, and hardware bundles
+
+P3 teaches the JavaScript side about the real board and defines what it hands to Go. The `gatemate-a1-evb`
+profile and `ccgm1a1` part make every example compile against the 10 MHz board clock; `hardware.js` turns a
+compiled design into a `weft.hw-bundle/v1` JSON document or refuses with a named reason; `tools/weft-hw.mjs`
+exposes that to Go. The surprise was the PLL: instead of modelling `CC_PLL`, I ported nextpnr's own divider
+search after probe builds showed its choices depend on mode and divider limits, and the port now reproduces
+nextpnr's "PLL fout=" for every frequency I probed.
+
+In parallel the reviewer agent applied its 17 findings to the guide; I added the PLL findings, committed the
+guide (4ebd83f) and uploaded it to reMarkable.
+
+### Prompt Context
+
+**User prompt (verbatim):** see Step 1.
+**Assistant interpretation:** Phase P3 of the guide: profile, part, delay model, PLL branch, bundle, CLI.
+**Inferred user intent:** Designs from the Lab become buildable inputs for the GateMate flow.
+**Commit (code):** afea73a — "P3: GateMate profile, nextpnr PLL port, hardware bundles"; guide 4ebd83f.
+
+### What I did
+- `boards.js`: `ccgm1a1` in `PART_DATA` (+ `partData` prefix), `BOARDS["gatemate-a1-evb"]` with physical
+  `led:0`, `btn:user`/`btn:0`, UART, PMOD LEDs `led:1..7`, and virtual `btn:1..3`, `sw:0..7`; `btn` group.
+- `estimate.js`: `ccgm1a1` in `PARTS`, `FAMILY.gatemate` (k 4, lut 0.9 ns, route 1.2 ns, carry 0.28 ns/bit:
+  a first guess from one nextpnr run, to calibrate in P4).
+- `gatemate-pll.js`: port of `GateMatePacker::get_pll_settings` for internal feedback, `PDIV0_MUX = 1`, low
+  jitter; `compile.js` `solvePll` calls it for `family === "gatemate"`; unknown-board message lists `BOARDS`.
+- `verilog.js`: `pinParts` exported so the bundle and `emitTop` share one mapping.
+- `hardware.js`: `buildBundle`, `HwError`, `CELL_CORES` (empty until P7), `PORTABLE_STEPS`.
+- `tools/weft-hw.mjs bundle <script> [--board] [--out]`: exit 2 with `{"error":{code,message,details}}`.
+- `test/hardware.test.mjs`: 9 tests (PLL table, solvePll, compile, refusals, port mapping, all examples).
+- `scripts/03-pll-probe/run.sh`: the nextpnr probe, kept as evidence.
+
+### Why
+- A port is exact by construction; a model would drift wherever the simulator and the board disagree, and
+  UART baud dividers computed from `CLK_HZ` would carry that error onto the wire.
+- Bare-part is checked before compile errors because a retargeted bare-part design's errors (F-13's checks
+  against a part without DSPs) follow from the retargeting, not from the design.
+
+### What worked
+- Probe (yosys + nextpnr-himbaechel, REF_CLK 10.0, SPEED): 1.0→1.0000, 7.3728→7.3718, 12→12, 24→24,
+  25.175→25.2083, 33.333→33.3333, 37.5→37.5, 48→48, 50→50, 66→65.8333, 100→100, 125→125, 133→132.5 MHz;
+  ECONOMY 25.175→25.2778. The JS port matches all 14 to four decimals (2–200 ms per solve).
+- nextpnr constrains PLL outputs itself: `constraining clock net 'clk0' to 25.17 MHz`, then
+  `Max frequency for clock 'gclk': 281.29 MHz (PASS at 25.18 MHz)`, so PLL domains need no SDC line.
+- Bundles: F-01, F-02, F-04, F-06 bundle. Refusals: F-03 compile (its intentional capture error), F-05 and
+  F-16 cells (debounce, uart-rx/tx until P7), F-07/F-09/F-15/F-18 no-pins, F-08/F-10/F-12/F-17/F-19 compile
+  (resources the board lacks: audio, hdmi, btn:up), F-11/F-13/F-14 bare-part.
+- `node --test test/*.test.mjs`: 17 files pass (121 s); `make web` builds the page (826 KB).
+
+### What didn't work
+- First probe build used `PERF_MD("ECONOMY")` (copied from uxn's `cc_pll_25.sv`) and nextpnr warned
+  `Warning: PLL 'pll' PERF_MD mode is 'ECONOMY' but FPGA performance mode is 'SPEED'.` and gave 25.2778 MHz;
+  my port (SPEED) said 25.2083 and looked wrong until a SPEED probe confirmed 25.2083. The board top uses SPEED.
+- In the guide I first wrote that nextpnr "does not pick the closest frequency"; checking the divider grid by
+  hand showed 121/24 and 91/18 are the closest reachable values in their modes, so I corrected the text.
+- My estimate.js edit closed the `FAMILY` object before the new entry:
+  `SyntaxError: Unexpected token ':'` at estimate.js:59; removed the stray `};`.
+- Two test mistakes: `$.a = $.a + 1` on a u2 is a Weft compile error (`u3 does not fit in u2`), fixed with
+  `wrap()`; F-01 compiled without a board override targets `pico`, a valid board, so the "no board" case now
+  uses F-11.
+
+### What I learned
+- `compiled.domains[d]` holds only `{hz, graph}`; clock kind, pin and PLL settings live in `compiled.clocks`.
+- `compiled.report.part` is the whole part record, not a name.
+
+### What was tricky to build
+- The PLL search's floating-point tolerance walk (`f_core_delta += stepsize` from 0, stepsize from the
+  requested value's fourth-decimal formatting) must be reproduced exactly, or a different (N1, N2, M1, M2)
+  wins a tie and the frequency changes.
+
+### What warrants a second pair of eyes
+- `gatemate-pll.js` carries nextpnr's permission notice (ISC-style); check it satisfies the license.
+- The gatemate delay constants are guesses; the Lab's fmax for GateMate is not trustworthy until P4 calibrates.
+
+### What should be done in the future
+- P4's runner must parse `PLL fout=` and fail when it disagrees with the bundle's `hz`.
+- P7 adds cores and adapters to `CELL_CORES` so F-05 and F-16 bundle.
+
+### Code review instructions
+- `weft-lab/app/src/core/hardware.js` (`buildBundle`, `portsOf`), `gatemate-pll.js`, `boards.js` profile.
+- `cd weft-lab/app && node --test test/hardware.test.mjs`;
+  `node tools/weft-hw.mjs bundle ../examples/F-01-blinky.js | head -40`.
+
+### Technical details
+- GateMate CC_PLL (SPEED): DCO = 10 MHz × PDIV1 × N1 × N2 in (1250, 2500] MHz; out = DCO / (2·PDIV1·M1·M2),
+  M1·M2 even or 1, out ≤ 416.75 MHz.

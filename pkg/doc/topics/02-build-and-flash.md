@@ -1,0 +1,55 @@
+---
+Title: Building and loading designs on the GateMateA1-EVB
+Slug: build-and-flash
+Short: Turn a Weft script into a bitstream with weft build, and load it with weft flash.
+Topics:
+- gatemate
+- toolchain
+- build
+Commands:
+- emit
+- build
+- flash
+IsTemplate: false
+IsTopLevel: true
+ShowPerDefault: true
+SectionType: GeneralTopic
+---
+
+A build has four steps, all visible as rows of `weft build`:
+
+1. **emit** — the Weft compiler (embedded in the binary, run with Node) compiles the script for
+   `gatemate-a1-evb` and produces a hardware bundle. `weft emit <script.js>` prints that bundle.
+2. **synth** — yosys `synth_gatemate` over the design and a generated board top (`weft_board_top`), which
+   adds the 10 MHz clock, PLLs for other clock domains, the reset, pin polarity and input synchronizers.
+3. **pnr** — nextpnr-himbaechel places and routes with `--timing-allow-fail`, so a design that misses
+   timing still gets a report and a bitstream.
+4. **pack** — gmpack writes `top.bit`.
+
+    weft build weft-lab/examples/F-01-blinky.js --load
+    weft build bundle.json --seed 3 --verbose
+
+Everything lands in `var/weft/builds/<id>/`: the sources, `synth.log`, `pnr.log`, `report.json`
+(utilization, fmax per clock, PLL checks, bitstream hash) and `top.bit`.
+
+## Loading
+
+`--load` (or `weft flash <id>`) writes the bitstream to the FPGA's SRAM through the board's RP2040
+programmer. It runs until power-off; the flash is never touched.
+
+A build whose clocks failed timing is refused unless you pass `--force`: it may work at room temperature
+and fail later, so loading it is a decision you make explicitly.
+
+    weft flash 20261018-185817-blinky-5e56
+    weft flash path/to/top.bit
+    weft flash <id> --force
+
+## What can go to hardware
+
+The design must name a board (`.board("gatemate-a1-evb")`, or any board whose resources the A1-EVB also
+has), bind at least one resource, and use only native cells that have a hardware core. Otherwise
+`weft emit` refuses with the reason: `bare-part`, `no-pins`, `cells`, or the compile error, for example
+"the gatemate-a1-evb board has no hdmi".
+
+On the A1-EVB, `led:0` and `btn:user` (alias `btn:0`) are the board's LED and button, `led:1..7` are PMOD
+pins, and `btn:1..3` and `sw:0..7` are virtual: they compile, and on the board they read as 0.

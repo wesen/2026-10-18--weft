@@ -15,7 +15,7 @@ lab-deps:
 	cd weft-lab/app && npm ci
 
 web:
-	$(GO) generate ./pkg/web
+	$(GO) generate ./pkg/web ./pkg/emitter
 
 build:
 	$(GO) build -o $(BIN) ./cmd/weft
