@@ -37,6 +37,8 @@ func fakeSuite(t *testing.T, pnrLog string, pnrDelay time.Duration) *toolchain.S
 		"nextpnr-himbaechel": fmt.Sprintf("sleep %.2f\ncat %q\necho config > top.txt\n", pnrDelay.Seconds(), fixture(pnrLog)),
 		"gmpack":             "cp \"$1\" \"$2\"\n",
 		"openFPGALoader":     "echo 'Load SRAM via JTAG: [==========] 100.00% Done'\n",
+		"iverilog":           "exit 0\n",
+		"vvp":                "echo 'WEFT-COSIM PASS 1100000'\n",
 	}
 	for name, body := range scripts {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
@@ -291,6 +293,9 @@ func TestRefusalsAndBusy(t *testing.T) {
 	if code, _ := f.do(t, "POST", "/api/hw/builds", map[string]any{"bundle": bundleJSON(t, nil), "hil": true}); code != http.StatusNotImplemented {
 		t.Errorf("hil = %d", code)
 	}
+	if code, out := f.do(t, "POST", "/api/hw/builds", map[string]any{"bundle": bundleJSON(t, nil), "validate": []string{"rtl"}}); code != http.StatusUnprocessableEntity || errCode(out) != "refused" {
+		t.Errorf("rtl without vectors = %d %v", code, out)
+	}
 	id := f.build(t, map[string]any{"bundle": bundleJSON(t, nil)})
 	if code, out := f.do(t, "POST", "/api/hw/builds/"+id+"/load", nil); code != http.StatusConflict || errCode(out) != "busy" {
 		t.Errorf("load while building = %d %v", code, out)
@@ -322,4 +327,32 @@ func errCode(out map[string]any) string {
 	e, _ := out["error"].(map[string]any)
 	s, _ := e["code"].(string)
 	return s
+}
+
+func TestValidate(t *testing.T) {
+	f := newFixture(t, fakeSuite(t, "nextpnr-pass-pll.log", 0))
+	vec, err := os.ReadFile(filepath.Join("..", "validate", "testdata", "F-01-blinky.vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := f.build(t, map[string]any{"bundle": bundleJSON(t, nil), "validate": []string{"rtl", "build"}, "vectors": json.RawMessage(vec)})
+	v := f.wait(t, id)
+	got := []string{}
+	for _, r := range v["validation"].([]any) {
+		m := r.(map[string]any)
+		got = append(got, fmt.Sprintf("%s:%s", m["level"], m["status"]))
+	}
+	if strings.Join(got, " ") != "build:pass rtl:pass" {
+		t.Errorf("validation = %v (ladder order, build first)", got)
+	}
+	if code, out := f.do(t, "POST", "/api/hw/builds/"+id+"/validate", map[string]any{"levels": []string{"rtl"}, "vectors": json.RawMessage(vec)}); code != http.StatusAccepted {
+		t.Fatalf("validate again = %d %v", code, out)
+	}
+	v = f.wait(t, id)
+	if n := len(v["validation"].([]any)); n != 1 {
+		t.Errorf("revalidation kept %d results, want 1 (it replaces the previous run)", n)
+	}
+	if code, out := f.do(t, "POST", "/api/hw/builds/"+id+"/validate", map[string]any{"levels": []string{"bogus"}}); code != http.StatusUnprocessableEntity {
+		t.Errorf("bogus level = %d %v", code, out)
+	}
 }

@@ -11,7 +11,7 @@ import (
 
 // Register builds every command before mounting any, so a flag collision leaves the tree untouched.
 func Register(root *cobra.Command) error {
-	commands := []cmds.Command{NewServeCommand(), NewDoctorCommand(), NewEmitCommand(), NewBuildCommand(), NewFlashCommand()}
+	commands := []cmds.Command{NewServeCommand(), NewDoctorCommand(), NewEmitCommand(), NewBuildCommand(), NewFlashCommand(), NewValidateCommand()}
 	built := make([]*cobra.Command, 0, len(commands))
 	for _, c := range commands {
 		cc, err := cli.BuildCobraCommandFromCommand(c)

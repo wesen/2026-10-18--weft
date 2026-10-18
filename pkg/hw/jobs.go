@@ -16,6 +16,7 @@ import (
 	"github.com/wesen/2026-10-18--weft/pkg/board"
 	"github.com/wesen/2026-10-18--weft/pkg/bundle"
 	"github.com/wesen/2026-10-18--weft/pkg/toolchain"
+	"github.com/wesen/2026-10-18--weft/pkg/validate"
 )
 
 // Job states. While a stage runs, the job's state is that stage's name (synth, pnr, pack, load).
@@ -101,12 +102,17 @@ type BuildRequest struct {
 	Load        bool
 	Force       bool
 	ButtonReset string
+	Validate    []string          // ladder levels to run after the build
+	Vectors     *validate.Vectors // needed by the rtl and net levels
 }
 
 // Submit wraps the bundle (refusals come back synchronously) and starts the build in the background.
 func (m *Manager) Submit(req BuildRequest) (*Job, error) {
 	if m.suite == nil {
 		return nil, errors.Wrap(ErrNoToolchain, errMsg(m.suiteErr))
+	}
+	if err := checkLevels(req.Validate, req.Vectors); err != nil {
+		return nil, err
 	}
 	p, err := prepare(req.Bundle, BuildOptions{WorkDir: m.opt.WorkDir, Seed: req.Seed, ButtonReset: req.ButtonReset})
 	if err != nil {
@@ -141,8 +147,11 @@ func (m *Manager) run(j *Job, p *prepared, req BuildRequest) {
 		return
 	}
 	rep, err := m.suite.Build(m.ctx, p.req, j.events())
-	<-m.sem
 	j.setReport(rep)
+	if err == nil && rep != nil && rep.OK && len(req.Validate) > 0 {
+		m.runValidation(j, req.Vectors, req.Validate)
+	}
+	<-m.sem
 	switch {
 	case m.ctx.Err() != nil:
 		j.finish(StateInterrupted, "the server stopped during the build")
@@ -170,6 +179,45 @@ func (m *Manager) run(j *Job, p *prepared, req BuildRequest) {
 		return
 	}
 	j.finish(StateDone, "")
+}
+
+// Validate runs ladder levels for a finished build in the background (the build's slot rules apply).
+func (m *Manager) Validate(id string, levels []string, vec *validate.Vectors) (*Job, error) {
+	j := m.Job(id)
+	if j == nil {
+		return nil, os.ErrNotExist
+	}
+	if m.suite == nil {
+		return nil, errors.Wrap(ErrNoToolchain, errMsg(m.suiteErr))
+	}
+	if err := checkLevels(levels, vec); err != nil {
+		return nil, err
+	}
+	j.mu.Lock()
+	if j.active() {
+		j.mu.Unlock()
+		return nil, ErrBusy
+	}
+	j.setStateLocked(StateQueued)
+	j.mu.Unlock()
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		select {
+		case m.sem <- struct{}{}:
+		case <-m.ctx.Done():
+			j.finish(StateInterrupted, "the server stopped before validation started")
+			return
+		}
+		m.runValidation(j, vec, levels)
+		<-m.sem
+		if m.ctx.Err() != nil {
+			j.finish(StateInterrupted, "the server stopped during validation")
+			return
+		}
+		j.finish(StateDone, "")
+	}()
+	return j, nil
 }
 
 // Load loads a finished build's bitstream. It returns once the load is queued; progress goes to the
@@ -308,7 +356,7 @@ func (m *Manager) openJob(id, dir string) *Job {
 		rec = jobRecord{ID: id, CreatedAt: createdFromID(id, dir)}
 	}
 	j := newJob(m, id, rec.Design, dir, rec.CreatedAt, rec.Seed)
-	j.loaded, j.errMsg = rec.Loaded, rec.Error
+	j.loaded, j.validation, j.errMsg = rec.Loaded, rec.Validation, rec.Error
 	if b, err := OpenBuild(m.opt.WorkDir, dir); err == nil {
 		j.report, j.Seed = b.Report, b.Report.Seed
 		if j.Design == "" {
@@ -392,7 +440,7 @@ type LoadView struct {
 
 // Event is one message on a build's event stream.
 type Event struct {
-	Type    string            `json:"type"` // snapshot | state | stage | log | report | done
+	Type    string            `json:"type"` // snapshot | state | stage | log | report | validation | done
 	State   string            `json:"state,omitempty"`
 	Name    string            `json:"name,omitempty"`
 	Ms      int64             `json:"ms,omitempty"`
@@ -403,32 +451,35 @@ type Event struct {
 	OK      *bool             `json:"ok,omitempty"`
 	Error   string            `json:"error,omitempty"`
 	Job     *JobView          `json:"job,omitempty"`
+	Result  *validate.Result  `json:"result,omitempty"`
 }
 
 // JobView is a job as the API returns it.
 type JobView struct {
-	ID        string            `json:"id"`
-	Design    string            `json:"design"`
-	State     string            `json:"state"`
-	CreatedAt time.Time         `json:"createdAt"`
-	Seed      int               `json:"seed"`
-	OK        bool              `json:"ok"`
-	TimingOK  bool              `json:"timingOk"`
-	Stages    []StageView       `json:"stages,omitempty"`
-	Report    *toolchain.Report `json:"report,omitempty"`
-	Estimate  json.RawMessage   `json:"estimate,omitempty"`
-	Loaded    *LoadView         `json:"loaded,omitempty"`
-	Error     string            `json:"error,omitempty"`
+	ID         string            `json:"id"`
+	Design     string            `json:"design"`
+	State      string            `json:"state"`
+	CreatedAt  time.Time         `json:"createdAt"`
+	Seed       int               `json:"seed"`
+	OK         bool              `json:"ok"`
+	TimingOK   bool              `json:"timingOk"`
+	Stages     []StageView       `json:"stages,omitempty"`
+	Report     *toolchain.Report `json:"report,omitempty"`
+	Estimate   json.RawMessage   `json:"estimate,omitempty"`
+	Loaded     *LoadView         `json:"loaded,omitempty"`
+	Validation []validate.Result `json:"validation,omitempty"`
+	Error      string            `json:"error,omitempty"`
 }
 
 type jobRecord struct {
-	ID        string    `json:"id"`
-	Design    string    `json:"design"`
-	CreatedAt time.Time `json:"createdAt"`
-	Seed      int       `json:"seed"`
-	State     string    `json:"state"`
-	Loaded    *LoadView `json:"loaded,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	ID         string            `json:"id"`
+	Design     string            `json:"design"`
+	CreatedAt  time.Time         `json:"createdAt"`
+	Seed       int               `json:"seed"`
+	State      string            `json:"state"`
+	Loaded     *LoadView         `json:"loaded,omitempty"`
+	Validation []validate.Result `json:"validation,omitempty"`
+	Error      string            `json:"error,omitempty"`
 }
 
 // Job is one build and the loads of its bitstream.
@@ -439,17 +490,18 @@ type Job struct {
 	CreatedAt time.Time
 	Seed      int
 
-	m        *Manager
-	mu       sync.Mutex
-	state    string
-	stages   []StageView
-	report   *toolchain.Report
-	estimate json.RawMessage
-	loaded   *LoadView
-	errMsg   string
-	logs     []Event
-	subs     map[*subscriber]struct{}
-	changed  chan struct{} // closed and replaced on every state change
+	m          *Manager
+	mu         sync.Mutex
+	state      string
+	stages     []StageView
+	report     *toolchain.Report
+	estimate   json.RawMessage
+	loaded     *LoadView
+	validation []validate.Result
+	errMsg     string
+	logs       []Event
+	subs       map[*subscriber]struct{}
+	changed    chan struct{} // closed and replaced on every state change
 }
 
 func newJob(m *Manager, id, design, dir string, created time.Time, seed int) *Job {
@@ -481,7 +533,8 @@ func (j *Job) View() JobView {
 
 func (j *Job) viewLocked() JobView {
 	v := JobView{ID: j.ID, Design: j.Design, State: j.state, CreatedAt: j.CreatedAt, Seed: j.Seed,
-		Stages: append([]StageView(nil), j.stages...), Report: j.report, Estimate: j.estimate, Loaded: j.loaded, Error: j.errMsg}
+		Stages: append([]StageView(nil), j.stages...), Report: j.report, Estimate: j.estimate, Loaded: j.loaded,
+		Validation: append([]validate.Result(nil), j.validation...), Error: j.errMsg}
 	if j.report != nil {
 		v.OK, v.TimingOK = j.report.OK, j.report.TimingOK
 	}
@@ -624,7 +677,7 @@ func (j *Job) finish(state, msg string) {
 
 func (j *Job) persist() {
 	j.mu.Lock()
-	rec := jobRecord{ID: j.ID, Design: j.Design, CreatedAt: j.CreatedAt, Seed: j.Seed, State: j.state, Loaded: j.loaded, Error: j.errMsg}
+	rec := jobRecord{ID: j.ID, Design: j.Design, CreatedAt: j.CreatedAt, Seed: j.Seed, State: j.state, Loaded: j.loaded, Validation: j.validation, Error: j.errMsg}
 	j.mu.Unlock()
 	data, _ := json.MarshalIndent(rec, "", "  ")
 	if err := os.WriteFile(filepath.Join(j.Dir, "job.json"), append(data, '\n'), 0o644); err != nil {

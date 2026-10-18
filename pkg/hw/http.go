@@ -15,6 +15,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/wesen/2026-10-18--weft/pkg/bundle"
 	"github.com/wesen/2026-10-18--weft/pkg/server"
+	"github.com/wesen/2026-10-18--weft/pkg/validate"
 )
 
 const maxWait = 60 * time.Second
@@ -28,6 +29,7 @@ func (m *Manager) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hw/builds/{id}/events", m.handleEvents)
 	mux.HandleFunc("GET /api/hw/builds/{id}/files/{name...}", m.handleFile)
 	mux.HandleFunc("POST /api/hw/builds/{id}/load", m.handleLoad)
+	mux.HandleFunc("POST /api/hw/builds/{id}/validate", m.handleValidate)
 }
 
 func (m *Manager) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +44,14 @@ type createRequest struct {
 	ButtonReset string          `json:"buttonReset"`
 	HIL         bool            `json:"hil"`
 	Validate    []string        `json:"validate"`
+	Vectors     json.RawMessage `json:"vectors"`
+}
+
+func parseVectors(raw json.RawMessage) (*validate.Vectors, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	return validate.Parse(raw)
 }
 
 func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -50,8 +60,13 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		server.Fail(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if req.HIL || len(req.Validate) > 0 {
-		server.Fail(w, http.StatusNotImplemented, "unsupported", "hil and validate are not implemented yet")
+	if req.HIL {
+		server.Fail(w, http.StatusNotImplemented, "unsupported", "the HIL bridge is not implemented yet")
+		return
+	}
+	vec, err := parseVectors(req.Vectors)
+	if err != nil {
+		server.Fail(w, http.StatusUnprocessableEntity, "bad_vectors", err.Error())
 		return
 	}
 	if len(req.Bundle) == 0 {
@@ -67,7 +82,7 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Seed != nil {
 		seed = *req.Seed
 	}
-	j, err := m.Submit(BuildRequest{Bundle: bn, Seed: seed, Load: req.Load, Force: req.Force, ButtonReset: req.ButtonReset})
+	j, err := m.Submit(BuildRequest{Bundle: bn, Seed: seed, Load: req.Load, Force: req.Force, ButtonReset: req.ButtonReset, Validate: req.Validate, Vectors: vec})
 	if err != nil {
 		m.failWith(w, err)
 		return
@@ -218,6 +233,34 @@ func (m *Manager) handleLoad(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	j, err := m.Load(r.PathValue("id"), req.Force)
+	if err != nil {
+		m.failWith(w, err)
+		return
+	}
+	server.Respond(w, http.StatusAccepted, map[string]string{"id": j.ID})
+}
+
+type validateRequest struct {
+	Levels  []string        `json:"levels"`
+	Vectors json.RawMessage `json:"vectors"`
+}
+
+func (m *Manager) handleValidate(w http.ResponseWriter, r *http.Request) {
+	var req validateRequest
+	if err := readJSON(w, r, &req); err != nil {
+		server.Fail(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	vec, err := parseVectors(req.Vectors)
+	if err != nil {
+		server.Fail(w, http.StatusUnprocessableEntity, "bad_vectors", err.Error())
+		return
+	}
+	if len(req.Levels) == 0 {
+		server.Fail(w, http.StatusBadRequest, "bad_request", "levels is empty (build, rtl, net, board)")
+		return
+	}
+	j, err := m.Validate(r.PathValue("id"), req.Levels, vec)
 	if err != nil {
 		m.failWith(w, err)
 		return

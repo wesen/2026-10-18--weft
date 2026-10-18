@@ -24,6 +24,8 @@ export function HardwareTab() {
       <div className="toolbar">
         <Btn primary disabled={hw.busy} onClick={() => run(() => hw.build({ load: true }))} title="Compile for the A1-EVB, build, and load into SRAM">Build and load</Btn>
         <Btn disabled={hw.busy} onClick={() => run(() => hw.build())}>Build</Btn>
+        <Btn disabled={hw.busy} onClick={() => run(() => hw.validate())}
+          title="Build, then co-simulate the emitted RTL and a GateMate netlist against this simulator, scenario by scenario">Validate</Btn>
         <Btn disabled={!loadable} onClick={() => run(() => hw.load(hw.current, { force: j.timingOk === false }))}
           title={j?.timingOk === false ? "This build failed timing: it may misbehave on the board" : "Load the shown build into SRAM"}>
           {j?.timingOk === false ? "Load anyway" : "Load"}
@@ -85,6 +87,7 @@ function Build({ j }) {
         {j.loaded ? <p className={cls("note", !j.loaded.ok && "bad")}>Last load {when(j.loaded.at)}: {j.loaded.ok ? "on the board (SRAM)" : j.loaded.summary}</p> : null}
       </section>
       {r ? <Compare j={j} /> : null}
+      {j.validation?.length || j.state === "validate" ? <Validation j={j} /> : null}
       <Log />
       <Files j={j} />
     </>
@@ -141,8 +144,39 @@ function Log() {
   );
 }
 
+// the validation ladder (guide §6.10): build, then each scenario replayed against the RTL and the netlist
+function Validation({ j }) {
+  const rows = j.validation || [];
+  const has = (f) => (j.files || []).includes(f);
+  const links = (v) => {
+    if (!v.dir) return [];
+    if (v.dir === "validate/net") return [["synth.log", "validate/net/synth.log"]];
+    return [["changes", `${v.dir}/changes.txt`], ["testbench", `${v.dir}/tb.v`], ["log", `${v.dir}/${v.level}.log`]];
+  };
+  const pass = rows.filter((v) => v.status === "pass").length, fail = rows.filter((v) => v.status === "fail").length;
+  return (
+    <section className="rsec">
+      <h3>Validation <span className="dim">· {j.state === "validate" ? "running…" : `${pass} passed, ${fail} failed, ${rows.length - pass - fail} skipped`}</span></h3>
+      <table className="rt">
+        <thead><tr><th>level</th><th>scenario</th><th>result</th><th className="num">cycles</th><th className="num">time</th><th>details</th><th /></tr></thead>
+        <tbody>{rows.map((v, i) => (
+          <tr key={i} className={cls(v.status === "fail" && "badrow")}>
+            <td className="nm">{v.level}</td><td>{v.scenario || ""}</td>
+            <td className={v.status === "pass" ? "ok" : v.status === "fail" ? "bad" : "dim"}>{v.status}</td>
+            <td className="num">{v.cycles ? v.cycles.toLocaleString() : ""}</td><td className="num">{sec(v.ms)}</td>
+            <td className="lastmsg">{v.message || ""}</td>
+            <td className="hwfiles">{links(v).map(([label, f]) => <a key={f} className="link" href={hw.fileURL(f, j.id)} target="_blank" rel="noreferrer">{label}</a>)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+      {has("validate/net/netlist.v") ? <p className="hwfiles"><a className="link" href={hw.fileURL("validate/net/netlist.v", j.id)} target="_blank" rel="noreferrer">netlist.v</a><a className="link" href={hw.fileURL("validate/net/synth.log", j.id)} target="_blank" rel="noreferrer">synth.log</a></p> : null}
+      <p className="note dim">rtl and net run a variant of the design whose main clock is 1 MHz, so every scenario replays whole; a scenario that pokes internal signals is skipped.</p>
+    </section>
+  );
+}
+
 function Files({ j }) {
-  const files = (j.files || []).filter((f) => f !== "top.txt" && f !== "top.json");
+  const files = (j.files || []).filter((f) => f !== "top.txt" && f !== "top.json" && !f.startsWith("validate/"));
   if (!files.length) return null;
   return (
     <section className="rsec">

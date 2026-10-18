@@ -4,10 +4,11 @@
 import { lab } from "./lab.js";
 import { compile } from "../core/compile.js";
 import { buildBundle, HwError } from "../core/hardware.js";
+import { vectors } from "../core/vectors.js";
 
 export const HW_BOARD = "gatemate-a1-evb";
 const LOG_MAX = 3000;
-const ACTIVE = new Set(["queued", "synth", "pnr", "pack", "load"]);
+const ACTIVE = new Set(["queued", "synth", "pnr", "pack", "validate", "load"]);
 
 export class HwApiError extends Error {
   constructor(code, message, status) { super(message); this.name = "HwApiError"; this.code = code; this.status = status; }
@@ -65,6 +66,23 @@ class Hardware {
     this.refreshBuilds().catch(() => {});
     return { id };
   }
+  // build the editor's design and run the validation ladder on it: L0 (the build), L1 (RTL) and L2 (netlist)
+  // co-simulate against vectors recorded here, on a variant whose main clock is cosimHz
+  async validate({ levels = ["build", "rtl", "net"], scenario = null, cosimHz, load = false, force = false, seed = this.seed, script = lab.script } = {}) {
+    let bundle, vec;
+    try {
+      bundle = this.bundle(script);
+      vec = await vectors(script, { file: lab.preset?.file || "design.js", board: HW_BOARD, scenario, ...(cosimHz ? { cosimHz } : {}) });
+    } catch (e) {
+      if (e instanceof HwError) { this.refusal = { code: e.code, message: e.message, details: e.details }; this.bump(); }
+      throw e;
+    }
+    this.refusal = null;
+    const { id } = await this.api("POST", "/api/hw/builds", { bundle, seed, load, force, validate: levels, vectors: vec });
+    this.select(id);
+    this.refreshBuilds().catch(() => {});
+    return { id, scenarios: vec.scenarios.map((s) => s.skip ? `${s.name}: skipped (${s.skip})` : `${s.name}: ${s.cycles} cycles, ${s.changes.length} changes`), ...(vec.skip ? { skip: vec.skip } : {}) };
+  }
   async load(id = this.current, { force = false } = {}) {
     if (!id) throw new Error("no build to load: build first");
     await this.api("POST", `/api/hw/builds/${encodeURIComponent(id)}/load`, { force });
@@ -92,7 +110,7 @@ class Hardware {
     const j = this.job;
     switch (ev.type) {
       case "snapshot": this.job = ev.job; this.logs = []; break;
-      case "state": if (j) j.state = ev.state; break;
+      case "state": if (j) { j.state = ev.state; if (ev.state === "validate") j.validation = []; } break;
       case "stage": {
         if (!j) break;
         const st = { name: ev.name, state: ev.state, ms: ev.ms, summary: ev.summary };
@@ -101,10 +119,11 @@ class Hardware {
         break;
       }
       case "log":
-        this.logs.push({ stage: ev.stage, line: ev.line });
+        this.logs.push({ stage: ev.stage, line: ev.line ?? "" });   // the server omits empty lines' text
         if (this.logs.length > LOG_MAX) this.logs.splice(0, this.logs.length - LOG_MAX);
         break;
       case "report": if (j) { j.report = ev.report; j.ok = ev.report.ok; j.timingOk = ev.report.timingOk; } break;
+      case "validation": if (j) (j.validation ||= []).push(ev.result); break;
       case "done": {
         const id = this.current;
         this.get(id).then((v) => { if (this.current === id) { this.job = v; this.bump(); } }).catch(() => {});
@@ -134,6 +153,7 @@ export function agentHw({ readonly = false } = {}) {
     stages: (v.stages || []).map((s) => `${s.name}: ${s.state}${s.ms ? ` ${(s.ms / 1000).toFixed(1)} s` : ""}${s.summary ? " — " + s.summary : ""}`),
     ...(v.report ? { utilization: pick(v.report.utilization, ["CPE_LT", "CPE_FF", "RAM_HALF", "IOSEL", "PLL"]), clocks: (v.report.clocks || []).map((c) => `${c.name}: ${c.fmaxMHz} MHz (${c.pass ? "PASS" : "FAIL"} at ${c.targetMHz} MHz)`), plls: v.report.plls } : {}),
     ...(v.estimate ? { estimate: { luts: v.estimate.resources?.luts, ffs: v.estimate.resources?.ffs, fmaxMHz: v.estimate.fmaxMHz } } : {}),
+    ...(v.validation?.length ? { validation: v.validation.map((r) => `${r.level}${r.scenario ? ` "${r.scenario}"` : ""}: ${r.status}${r.message ? " — " + r.message : ""}`) } : {}),
     ...(v.loaded ? { loaded: v.loaded } : {}), ...(v.error ? { error: v.error } : {}),
   });
   const RO = (what) => () => { throw Object.assign(new Error(`hw.${what} changes the board; the agent is in Read-only mode`), { name: "ReadOnlyError" }); };
@@ -154,6 +174,12 @@ export function agentHw({ readonly = false } = {}) {
     },
     async job(id = hw.current, { wait } = {}) { need(); return view(await hw.get(id, { wait })); },
     load: readonly ? RO("load") : async (id = hw.current, opts = {}) => { need(); return hw.load(id, opts); },
+    async validate(opts = {}) {
+      need();
+      if (readonly && opts.load) return RO("validate({ load: true })")();
+      try { return await hw.validate(opts); }
+      catch (e) { if (e instanceof HwError) return { refused: e.code, message: e.message }; throw e; }
+    },
     async log(id = hw.current, stage = "pnr", lines = 40) {
       need();
       const r = await fetch(hw.fileURL(stage + ".log", id));
