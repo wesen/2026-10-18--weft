@@ -7,3 +7,4 @@ weft-lab/app/dist/
 /var/
 # spike/tool build directories
 ttmp/**/scripts/**/build/
+pkg/web/static/lab.html
