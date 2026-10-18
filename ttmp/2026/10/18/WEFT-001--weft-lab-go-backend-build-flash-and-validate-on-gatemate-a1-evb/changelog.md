@@ -34,3 +34,12 @@ P5 (e5acc8c): job manager + /api/hw (status, builds, SSE events, files, load wit
 
 - /home/manuel/code/wesen/2026-10-18--weft/pkg/hw/jobs.go — job table, board lock, event fan-out
 - /home/manuel/code/wesen/2026-10-18--weft/weft-lab/app/src/ui/hw.js — Lab client and the agent's hw object
+
+## 2026-10-18
+
+P6 (93f5da0): validation ladder L0-L2. vectors.js records scenario port changes on a 1 MHz co-simulation variant; pkg/validate replays them against the emitted RTL (iverilog) and a synth_gatemate netlist; weft validate, POST /api/hw/builds/{id}/validate, the Hardware tab's Validate button and hw.validate() for the agent. F-01/F-02 pass L1+L2; a broken netlist fails at cycle 250001 on led.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-10-18--weft/pkg/validate/run.go — co-simulation runner (RTL and netlist)
+- /home/manuel/code/wesen/2026-10-18--weft/weft-lab/app/src/core/vectors.js — records scenario port changes from the simulator

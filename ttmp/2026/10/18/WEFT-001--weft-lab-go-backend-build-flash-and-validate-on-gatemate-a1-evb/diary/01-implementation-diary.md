@@ -12,7 +12,11 @@ Topics:
 DocType: diary
 Intent: long-term
 Owners: []
-RelatedFiles: []
+RelatedFiles:
+    - Path: repo://pkg/hw/validate.go
+      Note: validation inside hardware jobs
+    - Path: repo://pkg/validate/testbench.go
+      Note: testbench generation for L1/L2
 ExternalSources: []
 Summary: ""
 LastUpdated: 2026-10-18T18:09:36.261047227-04:00
@@ -697,3 +701,149 @@ skips its load until "Load anyway", and the agent building F-02 on its own throu
 ### Technical details
 - API errors: 404 `not_found`, 409 `busy` | `needs_force` | `no_bitstream` | `board_session`, 422
   `bad_bundle` | `refused`, 501 `unsupported` (hil/validate), 503 `no_toolchain`.
+
+## Step 8: P6 — the validation ladder L0–L2: vectors, testbenches, `weft validate`, Validate in the Lab
+
+P6 checks that what goes to the board behaves like what the Lab simulated. The page (or `weft-hw.mjs
+vectors` for the CLI) runs every scenario on the simulator and records each change of the design's
+top-level ports. Go turns those recordings into a Verilog testbench per scenario and replays it against the
+emitted RTL (L1, iverilog) and against a GateMate netlist of that RTL with the vendor cell models (L2). L0
+is the build itself: a bitstream, timing met, nothing over capacity.
+
+The exit criteria hold. F-01 and F-02 pass L1 and L2 over whole scenarios (1.1 M and 650 k cycles), and a
+deliberately broken netlist fails at the expected cycle and port: "cycle 250001: led is 0, the simulator
+drove 1". The browser's Validate button ran F-02 end to end: build pass, rtl 3.3 s, net 39.9 s, and the poke
+scenario was skipped with its reason.
+
+### Prompt Context
+
+**User prompt (verbatim):** see Step 1. Mid-phase the user added: "I modprobed cdc_acm, we should be good".
+**Assistant interpretation:** Phase P6 of the guide (§6.10, §8.3): L0–L2 in the CLI, the job API, the tab and the agent.
+**Inferred user intent:** Trust a design on the board because the toolchain's output provably matches the simulator.
+**Commit (code):** 93f5da0 — "P6: validation ladder L0-L2, weft validate, Validate in the Lab"
+
+### What I did
+- `weft-lab/app/src/core/vectors.js`: `vectors(script, { file, board, cosimHz, scenario })` compiles the
+  design a second time with `overrides: { "clock.<main>": cosimHz }` (1 MHz by default), builds its hardware
+  bundle (refusals propagate as `HwError`), and records each scenario as `[cycle, port, hex]` changes.
+  Designs with more than one domain get `skip`; scenarios with a step in `INTERNAL` (poke, force, release,
+  knob, apply, patch, change, reload, restore, irq) get a per-scenario `skip` naming the step.
+- `weft-hw.mjs vectors` (`--scenario`, `--cosim-hz`) and `pkg/emitter.Vectors` for the CLI; the shared
+  `run` helper in `emitter.go` maps exit code 2 to `*emitter.Error` for both subcommands.
+- `pkg/validate`: `Parse` (schema, bundle, port indexes, cycle order and range), `Generate` (testbench and
+  one `<port>.mem` per port holding `{cycle[63:0], value[W-1:0]}` words for `$readmemh`), `Run` (writes
+  `rtl/`, synthesizes `net/netlist.v`, then one `sc-<slug>/` per scenario with `tb.v`, `changes.txt`, mems
+  and logs), and `parseOutput` (`WEFT-COSIM PASS <n>` or the first `MISMATCH cycle=… port=… got=… want=…`).
+- `weft validate <script> --levels build,rtl,net[,board]`: one row per level and scenario, progress on
+  stderr, an error exit when any check fails. `board` answers `skip` until P8.
+- `pkg/hw/validate.go` and `jobs.go`: a build request takes `validate` and `vectors`; after a successful
+  build the job enters state `validate`, publishes one `validation` event per result, and persists the
+  results in `job.json`. `POST /api/hw/builds/{id}/validate` re-runs the ladder on a finished build.
+  Unknown levels, and rtl/net without vectors, are 422 `refused`; bad vectors are 422 `bad_vectors`.
+- Lab: `hw.validate()` in `hw.js` (vectors are computed in the page, then sent with the bundle), the
+  Validate button and a Validation table in `Hardware.jsx` with links to each scenario's change list,
+  testbench and log, and to `netlist.v`/`synth.log`. Files hides `validate/`, so the `.vvp` and `.mem`
+  files stay out of the list.
+- Agent: `hw.validate(opts)` (allowed in Read-only mode unless `load: true`), `validation` lines in
+  `hw.job()`, and a sentence in `HW_SCOPE`.
+- Tests: `pkg/validate/validate_test.go` (generation golden values, parse rejections, real-toolchain
+  co-simulation of F-01 and F-02, broken netlist), `TestValidate` in `pkg/hw` (fake `iverilog` and `vvp`),
+  `test/vectors.test.mjs` (F-01's toggle cycles, ordering, skips, scenario selection, refusal).
+- Help topic `validation-ladder` (`pkg/doc/topics/03-validate.md`) and `pkg/doc/doc_test.go`.
+
+### Why
+- **Record from the board hooks, not the waves.** Waves record a value when the simulator notices it, which
+  for an input can be the instant `setInput` runs rather than the edge that first sees it. `record()` wraps
+  `board.setInput` (an input change belongs to cycle `D.cycle+1`, the next edge) and `board._pin` (an
+  output observed during edge k belongs to cycle `PD.cycle+1`, because the pin observers fire before the
+  registers commit). These two definitions make the testbench order simple: apply inputs, `#1`, compare,
+  then raise the clock.
+- **A 1 MHz variant, not the board's 10 MHz.** Every prescaler is sized from the main clock, so lowering it
+  shrinks the cycle count of a timed scenario by the same factor. F-01's 1.1 s scenario becomes 1.1 M
+  cycles, which the netlist simulation finishes in about 30 s.
+- **No reset in the testbench.** The simulator never resets; registers start at their initializers. The
+  emitted RTL uses `initial` values, `synth_gatemate` keeps them as `INIT` on `CC_DFF`, and `cells_sim.v`
+  honours `INIT`, so `rst` is held low on both sides.
+- **Synthesize the design top alone for L2.** The board top instantiates `CC_USR_RSTN` and `CC_PLL`, which
+  have no simulation models; `-noiopad -noclkbuf` keeps the netlist's ports identical to the RTL's.
+- **Compare only bound bits.** A port can be wider than the bits the design binds to pins; unbound bits are
+  free to differ, so each comparison is masked.
+
+### What worked
+- `vectors()` takes 43–135 ms for F-01, F-02, F-04 and F-06. F-03 is refused (compile errors for the
+  board), F-05 too (its debounce cell has no hardware core until P7).
+- L1/L2 timings: F-01 rtl 4.2 s, net 31.5 s (1.1 M cycles); F-02 rtl 2–3 s, net 20–25 s (650 k cycles).
+- `./bin/weft validate weft-lab/examples/F-02-counter.js --levels rtl,net` prints the table and exits 0.
+- Browser, F-02 *Validate*: build pass 5.5 s (103.25 MHz), rtl 3.3 s and net 39.9 s for "counts up, then
+  down" (650,000 cycles match), "wraps below zero" skipped at both levels: `step poke("counter.down")
+  changes the design's internals, which the RTL's ports cannot reproduce`. The header reads "3 passed, 0
+  failed, 2 skipped".
+- `GOWORK=off go test ./pkg/validate -count=1` (real toolchain): `ok … 128.143s`. `go test ./... -short`,
+  `make lint`, `make js-test` (23 pass) and `git diff --check` pass.
+- UART (for P7/P8): after `modprobe cdc_acm`, `/dev/ttyACM0` (DirtyJTAG 1209:c0ca, interface 01) is the
+  FPGA's UART at 115200 baud; F-06 (FSM UART) prints `hello\r\n` on it. `/dev/ttyACM1` stays silent.
+
+### What didn't work
+- First broken-netlist test: I deleted the `assign` that drives `led`, but in the netlist `led` comes from
+  a `CC_DFF .Q(led)`, so nothing changed and the test passed when it should fail. It now redirects `.Q` to
+  another net and adds `assign led = 1'b0;`.
+- Second attempt: iverilog rejected the netlist with `Output port expression must support a continuous
+  assignment.` because I declared `wire weft_broken;` after its first use. Dropping the declaration (an
+  implicit net) fixed it. The testbench now reports `MISMATCH cycle=250001 port=led got=0 want=1`.
+- The help topic silently vanished: `weft help validation-ladder` answered `Unknown help topic`. Its
+  `Short:` contained `weft validate: build`, which YAML reads as a mapping (`yaml: line 3: mapping values
+  are not allowed in this context`), and glazed logs topic parse errors only at debug level, before logging
+  is set up. Quoting fixed it; `TestTopicsParse` now parses every topic and checks for duplicate slugs. The
+  first slug, `validate`, also collided with the command name, so the topic is now `validation-ladder`.
+- The `validate` command's aligned long help was reflowed by the markdown renderer into one paragraph;
+  it is now a bullet list with one line per item.
+- The log pane showed `synth undefined` for blank tool lines (a P5 bug): `Event.Line` is `omitempty`, so an
+  empty line arrives without `line`. The client now defaults it to `""`.
+- A first JS test used F-10 as the multi-domain example; it is refused for the board ("the gatemate-a1-evb
+  board has no hdmi"), so the test uses an inline two-domain design instead.
+
+### What I learned
+- The simulator's edge order (combinational values from the old registers, pin observers, then commit)
+  means "the output at cycle k" is the value just before edge k, the same thing a testbench sees between
+  the input change and the rising edge.
+- Netlist simulation is 7–12× slower than RTL simulation in iverilog: F-01 4.2 s against 31.5 s (≈260 k
+  against ≈35 k cycles/s), F-02 3.3 s against 39.9 s in the browser run.
+
+### What was tricky to build
+- Merging changes: several bit-level `_pin` calls for one port land in the same cycle. `put()` folds them
+  into one `[cycle, port, value]` entry, so the testbench applies one word per port per cycle.
+- Re-validation on a job that already has results: the server clears the results and enters state
+  `validate` before the first new result, and the client clears its copy on that `state` event, so stale
+  rows never mix with new ones.
+
+### What warrants a second pair of eyes
+- `INTERNAL` is a deny-list of scenario ops. A new op that changes internals would be recorded as if it
+  were pin-only, and L1 would report a misleading mismatch instead of a skip.
+- Validation runs while the build semaphore is held, so a 40 s netlist run delays a queued build. That is
+  fine at `--max-builds 2`, but a separate validation pool might be better later.
+- Read-only agents may call `hw.validate()`: it writes only under `var/weft/builds`, the same reasoning as
+  `hw.build()`.
+
+### What should be done in the future
+- P7: hardware cores for uart-rx, uart-tx and debounce, with co-simulation cutting at the cell boundary
+  (F-05 and F-16 must pass L1).
+- P8: `board` level through `weft_hil` and the board session.
+- Multi-domain co-simulation needs time-based change lists rather than cycle numbers.
+
+### Code review instructions
+- Start at `weft-lab/app/src/core/vectors.js` (`record`), then `pkg/validate/testbench.go` (`Generate`),
+  `pkg/validate/run.go` (`Run`, `synthNetlist`, `simulate`), `pkg/hw/validate.go`, and
+  `weft-lab/app/src/ui/hw.js` (`validate`, `onEvent`).
+- `GOWORK=off go test ./pkg/validate -count=1 -v` (about 2 min, needs the OSS CAD Suite);
+  `./bin/weft validate weft-lab/examples/F-01-blinky.js --levels build,rtl,net`; in the Lab, load F-02,
+  Hardware tab, *Validate*.
+
+### Technical details
+- Vectors: `{ schema: "weft.vectors/v1", cosimHz, bundle, skip?, scenarios: [{ name, skip?, cycles,
+  changes: [[cycle, port, hex]], sim: { status, message } }] }`. Every port is 0 until its first change.
+- Testbench per cycle: apply the cycle's input words, `#1`, compare `(p & mask) !== (want & mask)` for each
+  output, `#4 clk = 1; #5 clk = 0`.
+- L2 synthesis: `synth_gatemate -top <top> -noiopad -noclkbuf -luttree -nomx8; write_verilog -noattr
+  netlist.v`, simulated with `share/yosys/gatemate/cells_sim.v`.
+- Files: `var/weft/validate/<id>/` (CLI) or `var/weft/builds/<id>/validate/` (jobs): `rtl/`, `net/`,
+  `sc-<scenario>/{tb.v, changes.txt, <port>.mem, rtl.log, net.log, rtl-compile.log, net-compile.log}`.
