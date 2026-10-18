@@ -1,0 +1,26 @@
+import { u, s, bit, constType, binType, unType, join, fits, wrapTo, satTo, evalOp, typeName, durMs, hzOf, periodS } from "../src/core/types.js";
+import assert from "node:assert/strict";
+const tn = typeName;
+// F-02: value u8; value+1 is u9, value-1 is s9, the conditional is s10, wrap(0-1) into u8 is 255
+const V = u(8), one = constType(1);
+assert.equal(tn(binType("add", V, one)), "u9");
+assert.equal(tn(binType("sub", V, one)), "s9");
+assert.equal(tn(join(binType("sub", V, one), binType("add", V, one))), "s10");
+assert.equal(wrapTo(evalOp("sub", s(9), [0, 1]), V), 255);
+assert.equal(tn(constType(-1)), "s1"); assert.equal(tn(constType(255)), "u8"); assert.equal(tn(constType(0)), "bit");
+assert.equal(tn(binType("mul", u(8), s(8))), "s16");
+assert.equal(tn(binType("and", u(8), s(8))), "s9");
+assert.equal(tn(unType("neg", s(4))), "s5");
+assert.equal(fits(u(8), u(9)), true); assert.equal(fits(u(9), u(8)), false); assert.equal(fits(u(8), s(9)), true); assert.equal(fits(s(8), u(9)), false);
+assert.equal(satTo(-1, u(8)), 0); assert.equal(satTo(300, u(8)), 255);
+assert.equal(wrapTo(-1, u(32)), 4294967295); assert.equal(wrapTo(2 ** 40 + 5, u(40)), 5); assert.equal(wrapTo(2 ** 47, s(48)), -(2 ** 47));
+assert.equal(wrapTo(-1n, u(64)), 18446744073709551615n);
+assert.equal(evalOp("xor", u(8), [0b1010, 0b0110]), 0b1100);
+assert.equal(evalOp("not", s(4), [5]), -6);
+assert.equal(evalOp("shl", u(4), [1, 3]), 8);
+assert.equal(evalOp("shr", s(4), [-8, 1]), -4);
+assert.equal(evalOp("mul", s(36), [3, -4]), -12);
+assert.equal(evalOp("slice", u(3), [0b101101], { lo: 2 }), 0b011);
+assert.equal(durMs("250ms"), 250); assert.equal(durMs("1.1s"), 1100); assert.equal(hzOf("48 kHz"), 48000); assert.equal(hzOf("25.175 MHz"), 25175000);
+assert.equal(periodS("48 kHz"), 1 / 48000);
+console.log("types ok");

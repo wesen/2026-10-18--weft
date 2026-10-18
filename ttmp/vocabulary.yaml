@@ -5,6 +5,16 @@ topics:
       description: Backend services
     - slug: websocket
       description: WebSocket lifecycle & events
+    - slug: weft
+      description: Weft FPGA grammar, compiler and Lab app
+    - slug: fpga
+      description: FPGA design, synthesis and hardware bring-up
+    - slug: gatemate
+      description: Cologne Chip GateMate FPGA and A1-EVB board
+    - slug: go
+      description: Go code and services
+    - slug: toolchain
+      description: Synthesis/place-and-route/programming toolchains
 docTypes:
     - slug: design-doc
       description: Structured rationale and architecture notes
@@ -16,6 +26,8 @@ docTypes:
       description: Ticket landing page
     - slug: skill
       description: Skill documentation (what it's for and when to use it)
+    - slug: diary
+      description: Chronological implementation diary
 intent:
     - slug: long-term
       description: Likely to persist

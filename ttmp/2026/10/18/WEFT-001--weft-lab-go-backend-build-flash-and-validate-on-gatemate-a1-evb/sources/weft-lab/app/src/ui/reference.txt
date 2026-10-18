@@ -1,0 +1,413 @@
+Weft is a JavaScript API for FPGA hardware. A script is the body of a function that returns design(…). Builder lambdas (B) run now in JS; hardware lambdas (H) are parsed into the IR and never called, so they see only $, the prelude, params and what .lib() ships; runtime lambdas (R) run later beside the simulator or the board.
+
+Every form used in F-01 through F-19, grouped by what it builds, with the example that introduces it. The "Lambda" column says which kind a function argument is: B builder (runs now), H hardware (parsed), R runtime (runs beside the simulator or board).
+## Grammar · Types and the hardware prelude
+  bit, u(n), s(n)
+      One bit; n-bit unsigned; n-bit two's complement · F-01, F-02
+  pulse
+      A bit that returns to 0 on cycles that do not write it · F-02
+  vec(T, n), struct({ … })
+      Arrays and records of types · F-04, F-05
+  T.init(v)
+      The register's reset value · F-04
+  wrap(x, T?), sat(x, T)
+      Narrow by keeping low bits; narrow by clamping · H · F-02, F-08
+  x[i], x.bits(hi, lo), x.as(T)
+      One bit; a bit range; reinterpret the same bits · H · F-06, F-08, F-17
+  clog2(k)
+      Bits needed to count k values · B, H · F-11
+  past(x), within(n, x), sequence(…)
+      Temporal helpers for properties · H · F-11
+## Grammar · Modules, fsms and pipelines
+  module(name), fsm(name), pipeline(name)
+      A component; fsm and pipeline add their own methods · F-01, F-06, F-09
+  .in(name, T), .out(name, T), or an object of them
+      Ports; a type may be a lambda of params · B · F-02, F-04
+  .regs({ … })
+      Internal registers · B · F-03
+  .seq(fn), .every(dur, fn), .on(event, fn)
+      Clocked blocks: what they write is a register · H · F-02, F-01, F-05
+  .comb(fn)
+      A combinational block: what it writes is a wire · H · F-02
+  .params({ … }), .require(fn)
+      Build-time parameters and a check on them · B · F-04, F-11
+  .with({ … }), .as(name), .domain(name)
+      A new specialized, renamed or re-clocked value · F-04, F-18
+  .lib({ … } | fn)
+      Ship constants, tables and helpers into hardware lambdas · B · F-03, F-06
+  .provides(…), .needs(…)
+      Streams produced and consumed, linked by name · F-05
+  .bind({ port: resource })
+      Claim a board resource for a port · F-01
+  .ram(name, { of, words })
+      A memory owned by the module · F-08
+  .knob(name, T, { reset, min, max }), .status(name, T), .irq(name)
+      Registers the host may turn, may read, or hears from · F-12
+  .budget(fn), .hint(fn), .pipelined({ path })
+      Resource limits, mapping hints, latency the compiler may change · B · F-03, F-15
+  .assert(name, fn), .assume(name, fn), .cover(name, fn)
+      Properties for simulation, proofs and monitors · H · F-11
+  .supervise(fn), .probe(fn)
+      Watchdog with local reset; on-chip signal capture · B (watchdog condition H) · F-19
+  .migrate(fn)
+      Map old register values to new ones on a live swap · R · F-17
+  fsm: .initial(s), .state(s, fn), .step(stream), .encode(kind)
+      States as lambdas returning the next state · H · F-06, F-19
+  pipeline: .stage(name, fn), .stall(kind)
+      Stages with inferred pipeline registers · H · F-09
+  In hardware: $.x, $.push(s, v), $.has(s), $.take(s), $.mem.read(a), $.mem.q, $.mem.write(a, v)
+      Signals, stream beats and memory ports · H · F-01 to F-08
+## Grammar · Streams, memories and standard parts
+  stream(name).of(T)
+      A typed valid/ready channel · F-06
+  .buffer(n, { overflow })
+      Depth and policy: block, drop-oldest, drop-newest, latest · F-07
+  .cross({ from, to })
+      A sanctioned clock-domain crossing · F-10
+  rom(name).of(T).from(n, i => v)
+      A table filled by a builder lambda · F-08
+  std.debounce, std.uart.rx, std.uart.tx, std.sigmaDelta, std.video.timing, std.video.hdmi, std.bridge.uart
+      Standard components, configured with their own methods · F-05 to F-19
+## Grammar · Designs
+  design(name), .use(…)
+      The top level and what it contains · F-01
+  .board(profile), .boards({ … }), .part(name), board(p).part(name)
+      Where it runs: one board, several, or a bare part · F-01, F-13, F-16
+  .clocks(c => c.pin(…).pll(…).port(…))
+      Clock domains and how each is made · F-10, F-13
+  .wire(a, b), .wire([[a, b], …]), .pins({ … })
+      Explicit connections and pin bindings · F-02, F-04
+  group(name).children(…).supervise(…)
+      A reset group with a restart strategy · F-19
+  .boot(b => b.start(…).then(…).background(…))
+      The order in which resets are released · F-19
+  .regions(…), .place({ … }), .record({ … })
+      Reconfigurable slots, what lives in them, what is recorded for replay · F-17
+  .prove(p => p.module(…).bmc(k).induction().engine(…))
+      Formal proofs · F-11
+  .scenario(name, fn, { levels, targets })
+      A test, run at chosen IR levels and targets · F-01, F-14, F-16
+## Grammar · The compiler
+  .compile(c => …)
+      Configure the pass pipeline; with nothing, the default runs · F-08
+  c.use(p), c.stage(name, s => s.pass(…).fixpoint(…))
+      Start from a pipeline; declare a stage · F-13
+  c.after(x, …), c.before(x, …), c.replace(x, p), c.when(t => …, …)
+      Edit a pipeline, per target if needed · F-14, F-15, F-16
+  c.cache(dir), c.verifyEach(), c.snapshot(…), c.inspect(…), c.explainPlan()
+      Incremental builds and seeing inside · F-13, F-14
+  c.check(name, r => true | message), c.emit(backend, opts)
+      Checks on the report; outputs · F-08, F-12
+  c.explore(x => x.knob(…).measure(…).keep(…).pareto(…))
+      Design-space exploration · F-15
+  pass(name).on(level).requires(…).preserves(…).params(…).visit(op, fn)
+      A transformation (fn is B, over the IR) · F-14
+  analysis(name).on(level).run(fn)
+      A cached fact about the IR · F-14
+  rewrite(name).from(fn).where(fn).to(fn).examples(…)
+      A rule: pattern and replacement are H, the guard is B · F-14
+  backend(name).on(level).emit((ir, out) => …)
+      An output written by walking an IR level · F-16
+## Grammar · Scenarios, runtime, changes and agents
+  sc.wait, .step, .poke, .press, .toggle, .uart, .feed, .throttle, .write, .hang, .repeat
+      Drive the simulated design · F-01 to F-19
+  sc.expectPins, .expectSignal, .expectState, .expectStream, .expectUart, .expectFrame, .expectDropped, .expectKnob, .expectIrq, .expectResets, .expectToggles
+      Check it; their lambdas are R · F-01 to F-19
+  async tb => … with tb.poke, tb.peek, tb.push, tb.pull, tb.random, tb.expect, tb.expectCoverage
+      An imperative testbench · F-03, F-09, F-11
+  host(name).over(bridge).onStart(fn).every(dur, fn).on(event, fn) with dev.knob(p).set/update, dev.status(p).read
+      Software beside the board · F-12, F-19
+  change(title).knob(…).patch(…).replace(…)
+      A change to the running design · F-17
+  .verify(v => …), .deploy(d => d.partial(…).canary(…)), .rollbackOn(…)
+      How it is checked, loaded and undone · F-17
+  sc.apply, .approve, .build, .expectChange, .expectBuild, .expectProposal, .expectEscalation
+      Drive and check the change pipeline · F-17 to F-19
+  agent(name).model(…).guidelines(…).scope(…).budget(…).on(event, fn), std.agents.mechanic
+      A participant that proposes changes · F-18, F-19
+
+The API as typed declarations, the IR's opcodes, the pass catalogue and the diagnostics. The declarations are TypeScript notation for reference only; the implementation is JavaScript. HW marks a hardware lambda (parsed, never called) and RT a runtime lambda.
+
+## API declarations
+// ---- types and lambdas ----
+interface Type { readonly width: number; readonly signed: boolean; init(v: number | bigint | object): Type }
+declare function u(n: number): Type;           declare function s(n: number): Type;
+declare const bit: Type, pulse: Type;
+declare function vec(t: Type, n: number): Type; declare function struct(f: Record<string, Type>): Type;
+type Params = Record<string, unknown>;
+type Env = { clock: { name: string; hz: number }; part: string; board?: string };
+type Lazy<T> = T | ((p: Params, env: Env) => T);       // a builder lambda of params (D2, D3)
+type HW = ($: any, ...args: any[]) => any;             // parsed into HIR, never called
+type RT<A extends any[], R> = (...a: A) => R;           // ordinary JS, runs beside sim or board
+type Dur = string;                                      // "250ms", "1s", "48 kHz"
+
+// ---- components: module(), fsm(), pipeline() ----
+interface Component<Self> {
+  readonly name: string;
+  params(p: Params): Self;                 require(check: (p: Params) => true | string): Self;
+  in(name: string, t: Lazy<Type>): Self;   in(ports: Record<string, Lazy<Type>>): Self;
+  out(name: string, t: Lazy<Type>): Self;  out(ports: Record<string, Lazy<Type>>): Self;
+  regs(r: Lazy<Record<string, Type>>): Self;
+  seq(f: HW): Self;  comb(f: HW): Self;  every(d: Dur, f: HW): Self;
+  on(event: string, f: HW): Self;          // a stream name, "port.rise" or "port.fall"
+  provides(...streams: string[]): Self;    needs(...streams: string[]): Self;
+  lib(v: Lazy<Record<string, unknown>>): Self;
+  bind(m: Record<string, string>): Self;   domain(name: string): Self;
+  ram(name: string, o: { of: Type; words: number; rdw?: "read-first" | "write-first" }): Self;
+  knob(name: string, t: Type, o?: { reset?: number; min?: number; max?: number; doc?: string }): Self;
+  status(name: string, t: Type): Self;     irq(name: string): Self;
+  budget(f: (b: Budget) => Budget): Self;  hint(h: Lazy<Record<string, string>>): Self;
+  pipelined(o: { path: [string, string] }): Self;
+  assert(name: string, f: HW): Self;  assume(name: string, f: HW): Self;  cover(name: string, f: HW): Self;
+  supervise(f: (s: Supervisor) => Supervisor): Self;  probe(f: (p: Probe) => Probe): Self;
+  migrate(f: RT<[Record<string, number>], Record<string, number>>): Self;
+  with(p: Params): Self;  as(name: string): Self;
+}
+interface Fsm extends Component<Fsm> {
+  initial(s: string): Fsm;  state(s: string, f: HW): Fsm;  step(stream: string): Fsm;
+  encode(e: "auto" | "binary" | "onehot" | "gray"): Fsm;
+}
+interface Pipeline extends Component<Pipeline> { stage(name: string, f: HW): Pipeline; stall(k: "global" | "skid"): Pipeline }
+interface Budget { luts(n: number): Budget; ffs(n: number): Budget; brams(n: number): Budget; dsps(n: number): Budget }
+interface Supervisor { watchdog(d: Dur, alive: HW): Supervisor; reset(k: "local"): Supervisor;
+  strategy(k: "one-for-one" | "all-for-one" | "dependents"): Supervisor; maxResets(n: number, window: Dur): Supervisor; escalate(agent: string): Supervisor }
+interface Probe { signals(...names: string[]): Probe; depth(n: number): Probe; keep(k: "before-reset" | "on-trigger"): Probe }
+
+// ---- streams, memories, groups ----
+interface Stream { of(t: Type): Stream; buffer(n: number, o?: { overflow: "block" | "drop-oldest" | "drop-newest" | "latest" }): Stream;
+  cross(o: { from: string; to: string }): Stream }
+interface Rom { of(t: Type): Rom; from(n: number, f: (i: number) => number): Rom }
+interface Group { children(...names: string[]): Group; supervise(f: (s: Supervisor) => Supervisor): Group }
+
+// ---- designs ----
+type Level = "hir" | "dag" | "net" | "phys";
+interface Design {
+  board(b: string | Board): Design;  boards(m: Record<string, Board>): Design;  part(p: string): Design;
+  clocks(f: (c: Clocks) => Clocks): Design;
+  use(...items: unknown[]): Design;
+  wire(from: string, to: string): Design;  wire(pairs: [string, string][]): Design;  pins(m: Record<string, string>): Design;
+  regions(f: (r: Regions) => Regions): Design;  place(m: Record<string, string>): Design;
+  record(o: { streams?: string[]; inputs?: boolean; keep: Dur }): Design;
+  boot(f: (b: Boot) => Boot): Design;
+  compile(f?: (c: Compiler) => Compiler): Design;
+  prove(f: (p: Prover) => Prover): Design;
+  scenario(name: string, f: ((sc: Sc) => Sc) | RT<[Tb], Promise<void>>, o?: { levels?: Level[]; targets?: "all" | string[] }): Design;
+}
+interface Board { part(p: string): Board }
+interface Clocks { pin(name: string, resource: string): Clocks; port(name: string, o: { hz: string }): Clocks;
+  pll(name: string, o: { from: string; hz: string; tolerance?: string }): Clocks }
+interface Boot { start(...g: string[]): Boot; then(...g: string[]): Boot; background(...g: string[]): Boot }
+interface Prover { module(name: string): Prover; bmc(k: number): Prover; induction(): Prover; engine(e: "smt" | "abc-pdr"): Prover }
+
+// ---- the compiler ----
+interface Compiler {
+  use(p: PassPipeline): Compiler;  stage(name: string, f: (s: Stage) => Stage): Compiler;
+  after(at: string, f: (s: Stage) => Stage): Compiler;  before(at: string, f: (s: Stage) => Stage): Compiler;
+  replace(name: string, p: Pass): Compiler;  without(name: string): Compiler;
+  when(pred: (t: Target) => boolean, f: (c: Compiler) => Compiler): Compiler;
+  cache(dir: string): Compiler;  verifyEach(): Compiler;  validate(o?: { passes?: string[] }): Compiler;   // validate: D10
+  snapshot(l: Level, o: { after: string; as: "dot" | "text" | "json"; to: string }): Compiler;
+  inspect(l: Level, f: (ir: IR) => void, o?: { after: string }): Compiler;
+  check(name: string, f: (r: Report, t: Target) => true | string): Compiler;
+  emit(b: string | Backend, o?: { to?: string | ((t: Target) => string); level?: Level }): Compiler;
+  explore(f: (x: Explorer) => Explorer): Compiler;  explainPlan(): Compiler;
+}
+interface Stage { pass(...p: Pass[]): Stage; fixpoint(o: { max: number }): Stage }
+interface PassB { on(l: Level): PassB; requires(...a: Array<Analysis | string>): PassB; preserves(...names: string[]): PassB;
+  params(p: Params): PassB; visit(op: string | string[], f: (n: Node, g: IR, ctx: Record<string, unknown>) => void): PassB;
+  run(f: (g: IR, ctx: Record<string, unknown>) => void): PassB; readonly(): PassB; with(p: Params): PassB }
+interface AnalysisB { on(l: Level): AnalysisB; run(f: (g: IR) => unknown): AnalysisB }
+interface RewriteB { from(p: HW): RewriteB; where(f: (m: Record<string, Node>) => boolean): RewriteB; to(r: HW): RewriteB;
+  examples(e: Array<[HW, HW | null]>): RewriteB }
+interface BackendB { on(l: Level): BackendB; emit(f: (ir: IR, out: { file(path: string, text: string): void }) => void): BackendB }
+interface Explorer { knob(path: string, values: unknown[]): Explorer; measure(f: (r: Report) => Record<string, unknown>): Explorer;
+  keep(f: (m: Record<string, unknown>) => boolean): Explorer; pareto(keys: string[]): Explorer; parallel(n: number): Explorer; report(path: string): Explorer }
+
+// ---- runtime, changes, agents ----
+interface Tb { poke(path: string, v: number): Promise<void>; peek(path: string): Promise<number>; step(n?: number): Promise<void>;
+  wait(d: Dur): Promise<void>; set(pins: string, v: number): Promise<void>; measure(pin: string, o: { over: Dur }): Promise<number>;
+  push(stream: string, beats: unknown | unknown[]): Promise<void>; pull(stream: string, n?: number): Promise<unknown>;
+  random: { int(lo: number, hi: number): number }; expect(c: boolean, msg?: string): void;
+  expectEqual(a: unknown, b: unknown, msg?: string): void; expectCoverage(k: "all" | string[]): void }
+interface Host { over(bridge: string): Host; onStart(f: RT<[Dev], unknown>): Host; every(d: Dur, f: RT<[Dev], unknown>): Host;
+  on(event: string, f: RT<[Dev, unknown], unknown>): Host }
+interface Dev { knob(path: string): { get(): Promise<number>; set(v: number): Promise<void>; update(f: (v: number) => number): Promise<void> };
+  status(path: string): { read(): Promise<number> }; registers(): Promise<unknown>; clock: { seconds(): number }; log(...a: unknown[]): void }
+interface Change { knob(path: string, v: number): Change; patch(module: string, p: { lib?: Record<string, unknown>; on?: Record<string, HW>; seq?: HW; comb?: HW }): Change;
+  replace(module: string, m: Component<any>): Change; verify(f: (v: Verify) => Verify): Change;
+  deploy(f: (d: Deploy) => Deploy): Change; rollbackOn(...events: Array<"assert" | "stall" | "watchdog" | "timing">): Change }
+interface Verify { lint(): Verify; ports(k: "same"): Verify; replay(window: string): Verify; timing(): Verify; equiv(o?: { upTo?: "stream latency" }): Verify }
+interface Deploy { partial(region: string): Deploy; canary(d: Dur, o?: { watch: string[] }): Deploy }
+interface Agent { model(m: string): Agent; guidelines(t: string): Agent; scope(f: (s: Scope) => Scope): Agent;
+  budget(o: { proposals: number; per: string }): Agent; on(event: string, f: RT<[Ctx, unknown], unknown>): Agent }
+
+## IR opcodes
+  in
+      the port's type · Value of an input port this cycle
+  out
+      x · the port's type · Drives an output port
+  const
+      narrowest type (D1), or attrs.type · A literal; attrs.value is a BigInt, and attrs.type keeps a declared type when folding produced the constant
+  reg
+      —; next set separately · declared type · Q of a register; attrs.init, domain; next is its D input
+  add, sub
+      a, b · D1 · Exact sum or difference; cannot overflow its own type
+  mul
+      a, b · w_a + w_b bits · Exact product
+  neg
+      a · s(n + 1) · Exact negation
+  and, or, xor
+      a, b · the wider operand · Bitwise, after extension
+  not
+      a · same · Bitwise inversion
+  shl, shr, ashr
+      a, k · constant k: w ± k; dynamic k: shl w + 2^w_k − 1, shr w · Shifts; ashr keeps the sign
+  eq, ne, lt, le, gt, ge
+      a, b · bit · Comparisons; attrs.signed
+  mux
+      c, t, f · smallest type holding t and f · c ? t : f
+  concat
+      a, b, … · sum of widths · The first operand is most significant
+  slice
+      a · hi − lo + 1 bits · Bits hi..lo; wrap() lowers to it
+  sext, zext
+      a · attrs.width · Sign or zero extension
+  sat
+      a · target type · Clamp to the target's range
+  mem
+      One memory; attrs.words, rdw, init
+  memrd
+      mem, addr, en · element type · Read port; the address is registered inside the port and the data appears on the next cycle (D8)
+  memwr
+      mem, addr, data, en · Write port; writes at the edge when en is high
+  rom
+      index · element type · Combinational table read; attrs.table, type
+  cell
+      inputs · attrs.outputs · A technology cell at level net: LUT, FF, CARRY, DSP, RAM
+  probe
+      x, … · Marks signals for scenarios and on-chip capture
+Pure opcodes are hash-consed on (op, args, type, attrs). in, out, reg, mem, memrd, memwr and probe are never merged.
+
+## Pass catalogue
+  parse
+      front · source → hir · Parses hardware lambdas; runs the capture check (D2)
+  elaborate
+      front · hir · Applies params, .with(), .require(); memoizes specializations (D3)
+  link
+      front · hir · Joins provides/needs, .wire() and pins; inserts forks; reports unmet-need, multi-producer, pin-claimed
+  fsm.extract
+      lower · hir · States and returns → transition graph and next-state logic
+  pipeline.registers
+      lower · hir · Inserts registers for values live across stages
+  stream.lower
+      lower · hir · Handshakes, buffers by depth and policy, drop counters (D7)
+  csr.collect
+      lower · hir · Gathers knobs, status and irqs into one register map and a bus slave
+  flatten
+      lower · hir → dag · Merges blocks (D4), removes hierarchy, one DAG per domain
+  widths
+      lower · dag · Infers and enforces D1
+  checks.loops
+      lower · dag · Rejects combinational cycles (comb-loop)
+  checks.latches
+      lower · dag · Rejects wires not assigned on every path (latch)
+  checks.cdc
+      lower · dag · Propagates domains; rejects unmarked crossings (cdc)
+  constFold
+      optimize · dag · Evaluates nodes whose operands are constants
+  cse
+      optimize · dag · Merges structurally equal pure nodes
+  muxTree
+      optimize · dag · Flattens and simplifies nested multiplexers
+  dce
+      optimize · dag · Removes nodes that reach no output, register or probe; narrows unused high bits
+  pipeline.cut
+      time · dag · Places pipeline stages on .pipelined() paths to meet the clock
+  retime
+      time · dag · Moves registers on .pipelined() paths (Leiserson–Saxe)
+  mem.infer
+      map · dag → net · Maps memories and registered ROM reads to RAM cells (D8)
+  dsp.pack
+      map · dag → net · Folds multiply, add and register into DSP cells
+  fsm.encode
+      map · dag · Chooses state encodings (D12)
+  srl.infer
+      map · net · 7-series only: shift-register chains to SRL16/SRL32 cells
+  techmap
+      map · dag → net · Maps logic to the part's LUTs and carry chains
+  place
+      back · net → phys · Assigns each cell a site
+  route
+      back · phys · Assigns each net a path
+  timing
+      back · phys · Static timing analysis; error timing on negative slack
+
+## Diagnostics
+  capture
+      error · parse · A hardware lambda uses a name outside $, the prelude, params and .lib()
+  lib-shadows-param
+      error · parse · A .lib() name equals a parameter name
+  lib-value
+      error · parse · A shipped value has no hardware meaning (a Map, a class instance)
+  unroll-bound
+      error · parse · A loop bound is not constant, or exceeds 4096 iterations
+  temporal-position
+      error · parse · within() or sequence() used outside the positions R9.2 allows
+  mem-read-value
+      error · parse · $.m.read(a) used as an expression; read data arrives in $.m.q on the next cycle
+  require
+      error · elaborate · A .require() check returned a message
+  unmet-need
+      error · link · A needed stream has no producer
+  multi-producer
+      error · link · Two modules provide one stream
+  pin-claimed
+      error · link · Two modules bind one output resource
+  fsm-target
+      error · fsm.extract · An initial or returned state is not a declared state
+  fsm-unreachable
+      warning · fsm.extract · A state cannot be reached from the initial state
+  every-no-clock
+      error · lower · .every() in a domain without a known frequency
+  width
+      error · widths · A narrowing assignment without wrap() or sat()
+  rom-index
+      error · widths · A ROM index type is wider than ⌈log2 n⌉ bits for an n-entry table
+  mixed-kind
+      error · flatten · A signal written in a clocked block and in .comb
+  multi-driver
+      error · flatten · Two .comb blocks write one wire
+  multi-writer
+      warning · flatten · Two clocked blocks can write one register on the same cycle; a witness is shown
+  mem-ports
+      error · flatten · Two reads or two writes of one .ram() can happen on the same cycle; a witness is shown
+  comb-read-before-write
+      error · flatten · A .comb lambda reads a wire before writing it
+  latch
+      error · checks.latches · A wire is not assigned on every path
+  comb-loop
+      error · checks.loops · A cycle without a register
+  cdc
+      error · checks.cdc · A signal crosses domains without .cross() or a crossing cell
+  pll
+      error · lower · No PLL or MMCM setting meets every requested output of one PLL within tolerance and VCO limits
+  region
+      error · lower · A raw wire crosses a reconfigurable region's boundary; only streams and knobs may (R15.5)
+  record-budget
+      error · map · A .record() window does not fit the board's memory or host link (R15.7)
+  rule-unsound
+      error · rewrite engine · A rewrite rule fails its proof at some width (D10)
+  lint
+      warning · a readonly pass · A message from g.warn(), reported at the node's source line
+  budget
+      error · map · A module exceeds its .budget()
+  timing
+      error · timing · Negative slack after routing; the path is reported by source line
+  stream-protocol
+      error · simulation · Valid fell, or data changed, before a beat fired (D7)
+  assert
+      error · simulation, proof · An assertion failed; the trace or counterexample is attached
+  assume-violated
+      error · simulation · The stimulus broke an assumption: a testbench bug, not a design bug
+  vacuous
+      warning · proof · No run satisfies the assumptions to the requested depth, so every assertion holds trivially

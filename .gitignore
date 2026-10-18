@@ -1,0 +1,9 @@
+# web build inputs/outputs of the working copy
+weft-lab/app/node_modules/
+weft-lab/app/dist/
+# Go build output and runtime state
+/bin/
+/dist/
+/var/
+# spike/tool build directories
+ttmp/**/scripts/**/build/
