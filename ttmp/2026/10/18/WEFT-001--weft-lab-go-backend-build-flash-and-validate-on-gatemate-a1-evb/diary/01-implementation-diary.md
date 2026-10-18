@@ -468,3 +468,122 @@ guide (4ebd83f) and uploaded it to reMarkable.
 ### Technical details
 - GateMate CC_PLL (SPEED): DCO = 10 MHz × PDIV1 × N1 × N2 in (1250, 2500] MHz; out = DCO / (2·PDIV1·M1·M2),
   M1·M2 even or 1, out ≤ 416.75 MHz.
+
+## Step 6: P4 — board layer, toolchain runner, weft emit/build/flash
+
+P4 is the first time a Weft script reaches the FPGA from this repository. `weft build F-01-blinky.js --load`
+emits a bundle with the embedded compiler, wraps it in a generated board top, runs yosys, nextpnr and gmpack
+into `var/weft/builds/<id>/`, and loads the bitstream over JTAG in about 4 seconds. The build report is
+computed from the tool logs rather than from exit codes, because nextpnr's exit code depends on whether
+`--timing-allow-fail` is set and says nothing about PLL frequencies.
+
+The design choices that matter for later phases: the board wrapper owns everything board-specific (reset,
+PLLs, polarity, synchronizers, virtual resources), so the emitted design stays the one the simulator ran;
+and a timing failure still produces a bitstream but refuses to load without `--force`.
+
+### Prompt Context
+
+**User prompt (verbatim):** see Step 1.
+**Assistant interpretation:** Phase P4 of the guide: bundle types, board wrapper, toolchain runner, CLI.
+**Inferred user intent:** Designs from the Lab build and load on the A1-EVB from the command line.
+**Commit (code):** b4f6dec — "P4: board layer, toolchain runner, weft emit/build/flash"
+
+### What I did
+- `pkg/bundle`: Go types for `weft.hw-bundle/v1` and `Validate` (Verilog identifiers, flat unique `.v`
+  paths with exactly one top, one main clock, synchronous active-high reset, ≥1 port, bits within width).
+- `pkg/board`: `Board`/`Resource`/`Pin`, `Lookup`, `PinPort`, `Wrap` → `weft_board_top.v`, CCF, SDC.
+  `gatemate.go` registers the A1-EVB: `led:0` IO_SB_B6 and `btn:user`=`btn:0` IO_SB_B7 (both active-low),
+  `led:1..7` on PMOD, UART on IO_SA_B6/IO_SA_A6, `btn:1..3` and `sw:0..7` virtual.
+- Wrapper: `rst_req = ~usr_rstn | ~<pll>_locked… | ~button` into a 2-flop reset released on `clk_10m`;
+  one `CC_PLL` (`PERF_MD("SPEED")`, `OUT_CLK` = the domain's requested MHz) plus `CC_BUFG` per PLL domain;
+  2-flop synchronizers on physical inputs in their domain; virtual inputs tied to 0 with a comment; two
+  resources on one pin are refused. Golden files for F-01 and F-02 (`go test ./pkg/board -update`).
+- `pkg/toolchain/logparse.go`: per-clock `Max frequency` (last line wins), `PLL fout=`, utilization,
+  non-timing `ERROR:` lines, "Program finished normally"; `ParseYosysStat` for CC_* counts. Fixtures are
+  real logs with home paths scrubbed.
+- `pkg/toolchain/build.go`: `Suite.Build` writes `rtl/`, `board/`, `synth.ys`, `bundle.json`, runs
+  synth → pnr → pack with each stage's output streamed to `<stage>.log`, checks `top.txt` exists and
+  `top.bit` is not older than `pnr.log`, compares every PLL's `fout` to the compiler's `hz` (1e-4 MHz), writes `report.json`.
+  `Suite.Load` runs openFPGALoader and requires its "Done" line.
+- `pkg/emitter`: esbuild bundles `tools/weft-hw.mjs` (go:generate) into `pkg/emitter/js/weft-hw.mjs`
+  (gitignored, embedded); `Emit` runs it with Node and maps exit 2 to a typed `*Error`.
+- `pkg/hw`: build ids (`20261018-185817-blinky-5e56`), `RunBuild`, `OpenBuild` (id or directory),
+  `Loadable`/`Load` with `ErrNeedsForce`.
+- Commands: `weft emit` (bare), `weft build [--load] [--seed] [--button-reset] [--verbose]` (one row per
+  stage), `weft flash <bit|id|dir> [--force]`; help topic `build-and-flash`; `doctor` uses the board's loader.
+- Ticket `scripts/04-designs/two-clocks.js` (sys + 25.175 MHz `pix`) and `too-fast.js` (400 MHz `pix`).
+
+### Why
+- Logs over exit codes: `--timing-allow-fail` turns a timing failure into a warning with exit 0; without it
+  the same failure is an `ERROR:` with exit 1. Either way the useful facts (fmax per clock, PLL fout) are only
+  in the log, so the runner always passes `--timing-allow-fail` and decides from the parsed log.
+- Bitstream-but-refuse for timing failures: a design at 400 MHz is a mistake, but a design that misses by 5 %
+  may be worth trying; the refusal message names the exact `weft flash <id> --force` command.
+- Virtual resources tie to 0 instead of failing, so every example that reads `sw:0` still runs on a board
+  without switches; the report lists them under `virtual` so nobody is surprised.
+
+### What worked
+- Board detected: `weft doctor` → colognechip GateMate Series GM1Ax, idcode 0x20000001.
+- `weft build weft-lab/examples/F-01-blinky.js --load`: synth 218 ms, pnr 3387 ms, pack 8 ms; CPE_LT 63/40960,
+  CPE_FF 25/40960, IOSEL 2/162; `u_design.clk_sys` 87.46 MHz (PASS at 10 MHz); 4,413-byte bitstream;
+  openFPGALoader "Load SRAM via JTAG: 100% Done".
+- two-clocks: `clk_pix` 83.03 MHz (PASS at 25.18), `clk_sys` 94.38 MHz; PLL check model 25.20833 vs fout
+  25.2083 MHz → ok; PLL 1/4 used.
+- too-fast: `clk_pix` 90.59 MHz (FAIL at 400 MHz), report `ok: true, timingOk: false`; `--load` refused with
+  exit 1; `weft flash <id> --force` loads it.
+- Estimate vs nextpnr fmax (the Lab's `FAMILY.gatemate` guesses from P3):
+
+  | Example | estimate MHz | nextpnr MHz | CPE_LT |
+  |---|---|---|---|
+  | F-01 blinky | 102.5 | 87.46 | 63 |
+  | F-02 counter | 108.7 | 103.25 | 91 |
+  | F-04 breathing | 66.0 | 79.81 | 369 |
+  | F-06 hello-uart | 51.7 | 63.69 | 351 |
+
+  All within ±20 %, errors in both directions; not worth refitting four constants on four points.
+- `GOWORK=off go test ./...` passes, including `TestBuildBlinky` against the real toolchain (3.5 s);
+  `make lint` (glazed-lint + vet) clean.
+
+### What didn't work
+- I had believed nextpnr exits 0 on a timing failure. Strict mode (no `--timing-allow-fail`) prints
+  `ERROR: Max frequency for clock 'u_design.clk_pix': 90.59 MHz (FAIL at 400.00 MHz)` and exits 1, which my
+  first parser counted as a toolchain error. The timing regex now accepts `Info|Warning|ERROR` and runs first;
+  both log variants are fixtures.
+- `c.Port[len("clk_"):]` in the wrapper could panic on a port not named `clk_*`; the clock-net map now
+  stores the port name itself.
+- Unused `os/exec` import in `build.go` after moving process handling into `step()`.
+- Glazed does not close the processor when `RunIntoGlazeProcessor` returns an error, so the stage table is
+  not printed for a refused `--load`. I kept that contract (errors must reach the root) and put the
+  actionable command in the error text, with stage progress already on stderr.
+
+### What I learned
+- nextpnr-himbaechel constrains PLL output nets from `OUT_CLK` itself; the SDC only needs the 10 MHz input.
+- nextpnr writes `top.txt` even when strict timing fails, so "file exists" is not a success signal; the
+  runner decides from the parsed log, and refuses a `top.bit` older than `pnr.log`.
+
+### What was tricky to build
+- The reset: `CC_USR_RSTN` is low during configuration, PLL `locked` comes later, and the user button is
+  active-low and asynchronous. ORing all three requests and synchronizing the release on the always-running
+  `clk_10m` gives one `rst` for every domain; domains clocked by a PLL see reset held until lock.
+
+### What warrants a second pair of eyes
+- The reset is released on `clk_10m` but consumed in PLL domains; release is synchronous to the wrong clock
+  for those domains. Fine for one cycle of slop at today's rates; P6's netlist sim should cover it.
+- `checkPLLs` matches PLL lines to domains by requested MHz; two domains requesting the same frequency
+  would both match the first line (harmless, same answer, but untidy).
+
+### What should be done in the future
+- P5 wraps `hw.RunBuild`/`Load` in a job table with SSE and a board lock.
+- Refit `FAMILY.gatemate` once P6/P7 add bigger designs (UART cores, BRAM).
+
+### Code review instructions
+- Start at `pkg/board/board.go` (`Wrap`, `top`) and `testdata/F-02-counter.top.v`, then
+  `pkg/toolchain/build.go` (`Build`, `checkPLLs`) and `logparse.go`.
+- `GOWORK=off go test ./pkg/... -count=1`; with the board attached:
+  `./bin/weft build weft-lab/examples/F-01-blinky.js --load` (needs USB access).
+
+### Technical details
+- nextpnr: `nextpnr-himbaechel --device CCGM1A1 --json synth.json -o pins=board/top.ccf
+  -o out=top.txt --sdc board/top.sdc --router router2 --seed N --timing-allow-fail`.
+- Build directory: `bundle.json rtl/*.v board/{weft_board_top.v,top.ccf,top.sdc} synth.ys synth.json
+  synth.log pnr.log top.txt top.bit pack.log report.json [load.log]`.
