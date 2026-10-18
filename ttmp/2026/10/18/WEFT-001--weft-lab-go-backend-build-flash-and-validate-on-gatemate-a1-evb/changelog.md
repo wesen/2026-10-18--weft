@@ -25,3 +25,12 @@ P3 (afea73a): GateMate profile, nextpnr CC_PLL port, hardware bundles. P4 (b4f6d
 
 - /home/manuel/code/wesen/2026-10-18--weft/pkg/board/board.go — board wrapper (reset, PLLs, polarity, synchronizers)
 - /home/manuel/code/wesen/2026-10-18--weft/pkg/toolchain/build.go — toolchain runner and report.json
+
+## 2026-10-18
+
+P5 (e5acc8c): job manager + /api/hw (status, builds, SSE events, files, load with force/409 rules), Lab Hardware tab (estimate vs nextpnr, live log, Load anyway), hw in the agent scope. Verified on the board from the browser and through the agent.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-10-18--weft/pkg/hw/jobs.go — job table, board lock, event fan-out
+- /home/manuel/code/wesen/2026-10-18--weft/weft-lab/app/src/ui/hw.js — Lab client and the agent's hw object

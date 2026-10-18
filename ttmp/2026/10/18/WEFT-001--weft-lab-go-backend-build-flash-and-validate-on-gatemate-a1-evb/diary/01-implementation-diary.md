@@ -587,3 +587,113 @@ and a timing failure still produces a bitstream but refuses to load without `--f
   -o out=top.txt --sdc board/top.sdc --router router2 --seed N --timing-allow-fail`.
 - Build directory: `bundle.json rtl/*.v board/{weft_board_top.v,top.ccf,top.sdc} synth.ys synth.json
   synth.log pnr.log top.txt top.bit pack.log report.json [load.log]`.
+
+## Step 7: P5 — hardware API, the Hardware tab, and `hw` for the agent
+
+P5 moves the P4 flow behind `weft serve`, so the Lab and its agent can use the board. The server keeps a job
+table (bounded build concurrency, one board mutex, a per-job event fan-out, `job.json` on disk), exposes it
+under `/api/hw/`, and the page grows a Hardware tab that only appears when that API answers. The agent gets
+the same capabilities as an `hw` object in its eval scope.
+
+All three paths were exercised on the board: Build and load from the browser, a timing-failed build that
+skips its load until "Load anyway", and the agent building F-02 on its own through `hw.build()` and
+`hw.job(id, { wait })`.
+
+### Prompt Context
+
+**User prompt (verbatim):** see Step 1.
+**Assistant interpretation:** Phase P5 of the guide (§6.8, §6.9, §6.12): jobs, SSE, lock, API, tab, agent scope.
+**Inferred user intent:** Build and load from the Lab itself, and let the Lab's agent do the same.
+**Commit (code):** e5acc8c — "P5: hardware API, the Lab's Hardware tab, hw in the agent scope"
+
+### What I did
+- `pkg/hw/build.go`: split `prepare` (wrap, id, directory) out of `RunBuild` so the API can return an id
+  before the toolchain runs; wrap errors become `*hw.Refusal` (HTTP 422 `refused`).
+- `pkg/hw/jobs.go`: `Manager` (`Submit`, `Load`, `Job`, `Jobs`, `SetSession`, `Close`) and `Job` (`View`,
+  `Wait`, `Subscribe`, `Files`). Builds wait on a semaphore of `--max-builds`; loads hold `boardMu`; while
+  `session` is set a load is refused with `ErrBoardSession`. Job state is the running stage's name, then
+  `done`/`failed`/`interrupted`. `job.json` is written at submit and finish; on start the manager lists
+  every directory under `builds/`, from `job.json` or, for CLI builds, `report.json`.
+- Events: `snapshot` (the whole job, then the last 500 log lines), `state`, `stage`, `log`, `report`, `done`.
+  A subscriber has a 1024-event buffer; log lines that do not fit are dropped, any other event that does not
+  fit closes the stream, and the browser's EventSource reconnects to a fresh snapshot.
+- `pkg/hw/status.go`: tool versions asked once; `openFPGALoader --detect` at most every 10 s, only when
+  `boardMu.TryLock()` succeeds (never during a load); serial device presence.
+- `pkg/hw/http.go`: the §6.12 routes except validate and the board session (P6/P8); `hil`/`validate` in a
+  build request answer 501. `GET builds/{id}?wait=30s` long-polls (capped at 60 s), which is what the
+  agent uses instead of SSE. Files are served from the build directory with path checks.
+- `pkg/hw/jobs_test.go`: a fake OSS CAD Suite whose `bin/` scripts replay the real yosys/nextpnr log
+  fixtures, driven over `httptest`: build+load, the SSE stream, timing failure → `needs_force` →
+  `board_session` → forced load, busy, refusals, restart.
+- `weft serve`: `--max-builds` (default 2); a missing suite only refuses builds.
+- Lab: `src/ui/hw.js` (API client, one EventSource for the shown build, `agentHw()` for the agent),
+  `src/ui/Hardware.jsx`, the tab in `App.jsx` (probed at startup), CSS in `weft.css`.
+- `lab-agent.js`: `hw` in `makeAgentScope`, in the eval tool's description, and (only when the backend
+  answers) in the system prompt's scope list, including "never load without the user asking for it".
+  Read-only mode refuses `hw.load` and `hw.build({ load: true })`.
+- Help topic `build-and-flash`: a "From the Lab" section.
+
+### Why
+- Long-poll for the agent, SSE for the page: an eval runs inside one `sample` round with at most 5 rounds,
+  so the agent needs one request that returns either the result or the current state; the tab wants every
+  log line as it comes.
+- Drop logs but close on anything else: a lost log line costs nothing, a lost `done` leaves the page
+  spinning forever. Closing forces a reconnect, and the snapshot repairs whatever was lost.
+- Stage views from `report.json`: the toolchain emits a stage's `done` before the runner has written its
+  summary, and the runner can still fail a stage afterwards (nextpnr ERROR lines, PLL mismatch).
+
+### What worked
+- `GET /api/hw/status`: suite 20260825 with all five versions; board detected (`0x20000001`); `/dev/ttyACM0`
+  absent (the tab says `sudo modprobe cdc_acm`).
+- Browser, F-01 *Build and load*: synth 237 ms, pnr 3.5 s, pack 9 ms (4,413 bytes), load 26 ms;
+  `load.log` ends `100.00%` / `Done`. Toast "blinky is on the board".
+- Browser, T-02 (400 MHz `pix`): `clk_pix` 90.59 MHz FAIL at 400; load stage `skipped` ("this build failed
+  timing; load it anyway with force"); *Load anyway* → loaded in 38 ms, error cleared.
+- Agent (Pi worker, Balanced): 4 evals in 22.8 s: `hw.bundle()`, `report()` + `hw.build({ load: false })`,
+  `hw.job("20261018-191542-counter-5dba", { wait: "30s" })`, `chat.table(...)`; it reported CPE_LT 91 vs
+  58 estimated, CPE_FF 31 vs 31, fmax 103.25 vs 108.7 MHz, and did not load.
+- Restarting the server restores every build, including the load stage and seed.
+- `go test ./... -count=1` (race-clean for `pkg/hw`), `make lint`, `make js-test` (17 files) pass.
+
+### What didn't work
+- First browser build: the stage table had no summaries (pnr's utilization/fmax line was missing) because
+  the job took stage views only from the tools' events. Fixed by replacing them from `report.Stages` and
+  the load result; the API test now asserts the pnr, pack and load summaries.
+- CLI builds showed "seed 0": the seed came from `job.json`, which `weft build` does not write. It now comes
+  from `report.json`.
+- `serve.go` failed to compile: `syntax error: unexpected name weft in argument list` — I had put
+  backticks inside the command's raw-string long help.
+- I first mapped refusals to a `board.Refusal` type that does not exist; `hw.Refusal` wraps every
+  `Wrap`/`Lookup` error instead (they are all refusals).
+- `gofmt -l` flagged `status.go`: a blank line left in the import block by a sed cleanup.
+
+### What I learned
+- Loading SRAM is fast: 26–38 ms for 4–13 KB bitstreams at 6 MHz JTAG. Detection (~0.3 s) costs more than a
+  load.
+- The comparison table shows the GateMate LUT estimate is consistently low: blinky 37 vs 63 CPE_LT, counter
+  58 vs 91, toofast 81 vs 131 (×1.6–1.7), while FFs are within 10 %. A LUT scale factor for
+  `FAMILY.gatemate` is a cheap fix once P6/P7 add bigger designs.
+
+### What was tricky to build
+- Snapshot ordering: `Subscribe` builds the snapshot and registers the subscriber under the job mutex, and
+  every publish happens under the same mutex, so no event can fall between the snapshot and the stream.
+
+### What warrants a second pair of eyes
+- `Status` holds its cache mutex while detection runs (bounded by openFPGALoader's 30 s timeout), so a hung
+  cable would stall concurrent status calls.
+- The agent's `hw.build()` is allowed in Read-only mode (it writes only `var/weft/builds`); only loads are
+  refused. Check that this matches the Read-only promise in the system prompt.
+- `nextpnr`'s GPIO count includes the clock pin, so the IO row's Δ is labelled rather than corrected.
+
+### What should be done in the future
+- P6: `POST builds/{id}/validate` and validation events; P8: the board session uses `SetSession`.
+
+### Code review instructions
+- `pkg/hw/jobs.go` (`run`, `Load`, `load`, `Subscribe`, `publishLocked`, `setReport`), `pkg/hw/http.go`
+  (`failWith`), then `weft-lab/app/src/ui/hw.js` and `Hardware.jsx`.
+- `GOWORK=off go test ./pkg/hw -race -short`; with the board: `./bin/weft serve`, open
+  http://127.0.0.1:8088/, load F-01, Hardware tab, *Build and load*.
+
+### Technical details
+- API errors: 404 `not_found`, 409 `busy` | `needs_force` | `no_bitstream` | `board_session`, 422
+  `bad_bundle` | `refused`, 501 `unsupported` (hil/validate), 503 `no_toolchain`.
