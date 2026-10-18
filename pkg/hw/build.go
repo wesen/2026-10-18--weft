@@ -59,13 +59,28 @@ func Wrap(bn *bundle.Bundle, opt BuildOptions) (*board.Board, *board.Wrapped, er
 	return b, w, err
 }
 
-// RunBuild wraps and builds a bundle in a new build directory.
-func RunBuild(ctx context.Context, suite *toolchain.Suite, bn *bundle.Bundle, opt BuildOptions, ev toolchain.Events) (*Build, error) {
+// prepared is a wrapped bundle with a fresh build directory, ready for the toolchain.
+type prepared struct {
+	id      string
+	dir     string
+	created time.Time
+	req     toolchain.BuildRequest
+}
+
+// Refusal is a bundle the board cannot host (unknown board or resource, wrong clock, shared pin).
+type Refusal struct{ Err error }
+
+func (r *Refusal) Error() string { return r.Err.Error() }
+func (r *Refusal) Unwrap() error { return r.Err }
+
+// prepare wraps the bundle (refusing what the board cannot host) and creates its build directory.
+func prepare(bn *bundle.Bundle, opt BuildOptions) (*prepared, error) {
 	b, w, err := Wrap(bn, opt)
 	if err != nil {
-		return nil, err
+		return nil, &Refusal{Err: err}
 	}
-	id := NewID(bn.Design, time.Now())
+	now := time.Now()
+	id := NewID(bn.Design, now)
 	dir, err := filepath.Abs(filepath.Join(BuildsDir(opt.WorkDir), id))
 	if err != nil {
 		return nil, err
@@ -73,8 +88,18 @@ func RunBuild(ctx context.Context, suite *toolchain.Suite, bn *bundle.Bundle, op
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	rep, err := suite.Build(ctx, toolchain.BuildRequest{Dir: dir, Bundle: bn, Board: b, Wrapped: w, Seed: opt.Seed}, ev)
-	return &Build{ID: id, Dir: dir, Report: rep}, err
+	return &prepared{id: id, dir: dir, created: now,
+		req: toolchain.BuildRequest{Dir: dir, Bundle: bn, Board: b, Wrapped: w, Seed: opt.Seed}}, nil
+}
+
+// RunBuild wraps and builds a bundle in a new build directory.
+func RunBuild(ctx context.Context, suite *toolchain.Suite, bn *bundle.Bundle, opt BuildOptions, ev toolchain.Events) (*Build, error) {
+	p, err := prepare(bn, opt)
+	if err != nil {
+		return nil, err
+	}
+	rep, err := suite.Build(ctx, p.req, ev)
+	return &Build{ID: p.id, Dir: p.dir, Report: rep}, err
 }
 
 // ErrNeedsForce marks a bitstream that failed timing: it loads only when the caller insists.

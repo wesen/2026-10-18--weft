@@ -7,6 +7,7 @@ import { dslScope, evalDsl } from "./scope.js";
 import { simTime, simCycle, safe, peek, poke, release, press, toggleSwitch, ledLevels, uart, uartText, lastFrame, instState, streamStats, changeList, stageOf, isWaiting } from "../ui/engine.js";
 import { clip, summarize, fmtPs, fmtHz, durPs } from "../ui/fmt.js";
 import { typeName } from "../core/types.js";
+import { hw, agentHw } from "../ui/hw.js";
 
 export const TIER_LABEL = { quick: "Fast", default: "Balanced", complex: "Deep" };
 const HISTORY = 16;
@@ -140,6 +141,10 @@ const AGENT_SCOPE = [
   ["log(...) · console.log(...)", "captured and returned with the result"],
 ];
 
+// only listed when the Lab runs under weft serve with its hardware API
+const HW_SCOPE = ["hw.bundle() · await hw.build({ load, force, seed }) → { id } · await hw.job(id, { wait: \"30s\" }) · await hw.load(id, { force }) · await hw.status() · await hw.builds() · await hw.log(id, stage, lines)",
+  "the user's real GateMateA1-EVB board through weft serve. hw.bundle() says whether the editor's design can go to the board (or why not). build() compiles it for the board and runs yosys, nextpnr and gmpack in the background (a few seconds for small designs); it returns { id } at once, so call hw.job(id, { wait: \"30s\" }) until state is done or failed. The job holds nextpnr's utilization and fmax per clock next to the Lab's estimate. load: true (or hw.load(id)) writes the bitstream to the FPGA's SRAM; a build that failed timing loads only with force. Never load without the user asking for it"];
+
 function instructions(conv) {
   const mode = agent.settings.mode;
   const ex = lab.presets.map((p) => `${p.id} ${p.title}`).join(" · ");
@@ -149,7 +154,7 @@ function instructions(conv) {
 ${GUIDELINES}
 
 You have exactly one tool, eval. Its code runs in the page as the body of an async function (use await; finish with \`return value\`). In scope:
-${AGENT_SCOPE.map(([a, b]) => `- ${a}: ${b}`).join("\n")}
+${[...AGENT_SCOPE, ...(hw.available ? [HW_SCOPE] : [])].map(([a, b]) => `- ${a}: ${b}`).join("\n")}
 The returned value comes back as YAML (a string verbatim), cut near 9,000 characters: return small, specific data, never whole graphs, traces or sources unless asked.
 Each user message starts with a [context] block only when it changed. It does not include the script: read it with editor.get().
 Times in the simulator are picoseconds. Links you write may use lab:line?n=12, lab:instance?path=counter, lab:tab?name=waves, lab:example?id=F-05, lab:change?id=c1.
@@ -246,7 +251,7 @@ export function retry(i, override) {
 // ---------------------------------------------------------------- the eval tool
 const evalTool = (msg) => ({
   name: "eval",
-  description: "Run JavaScript in the Weft Lab page as the body of an async function. Scope: lab, editor, compile, sim, io, scenarios, report, ir, passes, proofs, verilog, changes, examples, chat, ref, log, console and the Weft DSL builders. Returns \"ok\" plus a YAML summary of the returned value (a string comes back verbatim) and captured logs, cut near 9,000 characters; or \"error\" with the message and line.",
+  description: "Run JavaScript in the Weft Lab page as the body of an async function. Scope: lab, editor, compile, sim, io, scenarios, report, ir, passes, proofs, verilog, changes, examples, chat, ref, hw (the real board, under weft serve), log, console and the Weft DSL builders. Returns \"ok\" plus a YAML summary of the returned value (a string comes back verbatim) and captured logs, cut near 9,000 characters; or \"error\" with the message and line.",
   inputSchema: { type: "object", properties: { code: { type: "string", description: "JavaScript statements; use await; end with return <small value>" } }, required: ["code"] },
   execute: (input, c) => runEval(String(input?.code ?? ""), c?.signal, msg),
 });
@@ -489,6 +494,7 @@ export function makeAgentScope({ mode = "auto", onPart = () => {}, log = () => {
   const consoleObj = { log: (...a) => log(fmtArgs(a)), info: (...a) => log(fmtArgs(a)), warn: (...a) => log("warn: " + fmtArgs(a)), error: (...a) => log("error: " + fmtArgs(a)) };
   return {
     ...dslScope(), lab: LAB, editor, compile: compileFn, get sim() { return lab.sim; }, io, scenarios, report, ir, passes, proofs, verilog, changes, examples, chat, ref,
+    hw: agentHw({ readonly: mode === "readonly" }),
     log: (...a) => log(fmtArgs(a)), console: consoleObj,
   };
 }

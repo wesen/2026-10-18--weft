@@ -13,6 +13,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/wesen/2026-10-18--weft/pkg/artifacthost"
+	"github.com/wesen/2026-10-18--weft/pkg/board"
+	"github.com/wesen/2026-10-18--weft/pkg/hw"
 	"github.com/wesen/2026-10-18--weft/pkg/sampler"
 	"github.com/wesen/2026-10-18--weft/pkg/server"
 	"github.com/wesen/2026-10-18--weft/pkg/toolchain"
@@ -33,6 +35,7 @@ type ServeSettings struct {
 	Quick      string `glazed:"model-quick"`
 	Default    string `glazed:"model-default"`
 	Complex    string `glazed:"model-complex"`
+	MaxBuilds  int    `glazed:"max-builds"`
 }
 
 // ServeCommand hosts the Lab page, the artifact runtime and the hardware API.
@@ -50,6 +53,10 @@ The Lab's agent samples through francois's Pi worker (--sampler pi, the default)
 provider login in --pi-agent-dir. If the worker cannot start, the Lab still loads and its agent reports
 that sampling is unavailable. --sampler fake answers deterministically, for testing the wiring offline.
 
+With the OSS CAD Suite (--oss-cad-suite) and the board attached, the Lab's Hardware tab builds the
+current design, streams the toolchain's logs, compares the estimate with nextpnr's numbers, and loads the
+bitstream. Builds land in --work-dir/builds/<id>, the same place as the builds of weft build.
+
 The page keeps saved designs in localStorage, which belongs to the origin: keep the same --listen
 address between runs to keep them.`),
 		cmds.WithFlags(
@@ -65,6 +72,7 @@ address between runs to keep them.`),
 			fields.New("model-quick", fields.TypeString, fields.WithHelp("Pi provider/model for quick calls")),
 			fields.New("model-default", fields.TypeString, fields.WithHelp("Pi provider/model for default calls")),
 			fields.New("model-complex", fields.TypeString, fields.WithHelp("Pi provider/model for complex calls")),
+			fields.New("max-builds", fields.TypeInteger, fields.WithDefault(2), fields.WithHelp("Builds that may run at once (loads are always one at a time)")),
 		),
 	)}
 }
@@ -87,6 +95,13 @@ func (c *ServeCommand) Run(ctx context.Context, parsed *values.Values) error {
 	host := artifacthost.New(ctx, backend, func() ([]byte, error) { return web.Lab(s.LabFile) })
 	defer func() { _ = host.Close() }()
 	host.Register(srv.Mux)
+	suite, suiteErr := toolchain.Open(s.Suite)
+	if suiteErr != nil {
+		log.Warn().Err(suiteErr).Msg("no OSS CAD Suite: the Lab works, but builds are refused")
+	}
+	hwm := hw.NewManager(ctx, suite, suiteErr, hw.Options{WorkDir: s.WorkDir, MaxBuilds: s.MaxBuilds, Serial: s.Serial, Board: board.GateMateA1EVB})
+	defer func() { _ = hwm.Close() }()
+	hwm.Register(srv.Mux)
 	srv.Mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		server.Respond(w, http.StatusOK, map[string]any{"ok": true, "models": len(backend.Models())})
 	})

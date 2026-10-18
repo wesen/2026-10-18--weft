@@ -202,3 +202,14 @@ table { font-size: inherit; }
 .scatter circle.kept { fill: var(--bg); stroke: var(--ink); }
 .scatter circle.out { fill: var(--hair); }
 .rsec .ctlrow { display: flex; gap: 10px; align-items: center; font-size: var(--fs-xs); }
+
+/* Hardware tab (weft serve) */
+.hw .seed { width: 4.5em; margin-left: 4px; font: inherit; }
+.hwstatus { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.hwchip { font-size: var(--fs-xs); font-family: var(--mono); border: 1px solid var(--hair); padding: 1px 6px; white-space: nowrap; }
+.hwchip.bad { color: var(--accent); border-color: var(--accent); }
+.hwchip.dim { color: var(--ink-2); }
+.hwlog { margin: 8px 0 0; max-height: 320px; overflow: auto; font: var(--fs-xs)/1.45 var(--mono); background: var(--code-bg); border: 1px solid var(--hair); padding: 6px 8px; white-space: pre; }
+.hwfiles { display: flex; flex-wrap: wrap; gap: 4px 14px; font-family: var(--mono); font-size: var(--fs-xs); }
+.rt.hwstages td.lastmsg { white-space: normal; }
+.rsec h3.bad { color: var(--accent); }

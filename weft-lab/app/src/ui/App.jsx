@@ -10,11 +10,14 @@ import { PassesTab } from "./Passes.jsx";
 import { ReportTab } from "./Report.jsx";
 import { ChangesTab } from "./Changes.jsx";
 import { ProofsTab } from "./Proofs.jsx";
+import { HardwareTab } from "./Hardware.jsx";
+import { hw } from "./hw.js";
 import { fmtClock, fmtCount, fmtSpeed } from "./fmt.js";
 import { isWaiting, simTime } from "./engine.js";
 
 export function App() {
   useLab("ready", "ui");
+  useEffect(() => { hw.probe(); }, []);
   const [w, setW] = useState(() => { try { return +localStorage.getItem("weft-lab:edw") || 540; } catch { return 540; } });
   const drag = useRef(null);
   useEffect(() => {
@@ -135,23 +138,26 @@ function Header() {
 }
 
 const RIGHT = [["board", "Board"], ["modules", "Modules"], ["graph", "Graph"], ["waves", "Waves"], ["passes", "Passes"], ["report", "Report"], ["changes", "Changes"], ["proofs", "Proofs"]];
+// shown only when weft serve answers /api/hw/status
+const HARDWARE = ["hardware", "Hardware"];
 
 function Workspace() {
-  useLab("ui", "changes", "proofs", "boot", "compiled");
+  useLab("ui", "changes", "proofs", "boot", "compiled", "hw");
   const ch = lab.changes;
   const waiting = ch.filter(isWaiting).length;
   const c = lab.simCompiled || lab.compiled;
   const pr = lab.proofs?.result?.results || [];
   const prBad = pr.filter((r) => r.status === "failed" || r.status === "fail").length;
   const tab = lab.ui.right;
-  const counts = { modules: c?.instances?.length, changes: waiting || ch.length, proofs: prBad || (c?.asserts?.length ?? 0) };
+  const counts = { modules: c?.instances?.length, changes: waiting || ch.length, proofs: prBad || (c?.asserts?.length ?? 0), hardware: hw.busy ? "…" : null };
+  const tabs = hw.available ? [...RIGHT, HARDWARE] : RIGHT;
   return (
     <div className="pane" id="right">
       <Tabs value={tab} onChange={(v) => lab.setUI({ right: v })}
-        items={RIGHT.map(([v, l]) => [v, l, counts[v], (v === "changes" && waiting > 0) || (v === "proofs" && prBad > 0)])} right={<RunControls />} />
+        items={tabs.map(([v, l]) => [v, l, counts[v], (v === "changes" && waiting > 0) || (v === "proofs" && prBad > 0) || (v === "hardware" && hw.job?.timingOk === false)])} right={<RunControls />} />
       <div className="tabbody">
         {tab === "board" ? <BoardTab /> : tab === "modules" ? <ModulesTab /> : tab === "graph" ? <GraphTab /> : tab === "waves" ? <WavesTab />
-          : tab === "passes" ? <PassesTab /> : tab === "report" ? <ReportTab /> : tab === "changes" ? <ChangesTab /> : <ProofsTab />}
+          : tab === "passes" ? <PassesTab /> : tab === "report" ? <ReportTab /> : tab === "changes" ? <ChangesTab /> : tab === "hardware" && hw.available ? <HardwareTab /> : <ProofsTab />}
       </div>
     </div>
   );

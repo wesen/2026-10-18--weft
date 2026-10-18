@@ -44,6 +44,20 @@ and fail later, so loading it is a decision you make explicitly.
     weft flash path/to/top.bit
     weft flash <id> --force
 
+## From the Lab
+
+Under `weft serve` the Lab gets a **Hardware** tab (it stays hidden on claude.ai, where there is no
+backend). *Build* and *Build and load* compile the editor's design for the A1-EVB in the page, send the
+bundle to the server, and stream the stages and tool output back; the tab then puts the Lab's estimate
+next to nextpnr's utilization and fmax. Builds from the tab and from `weft build` share
+`var/weft/builds/`, so either can load the other's.
+
+The Lab's agent sees the same thing as `hw`: `hw.build()` returns a build id at once, and
+`hw.job(id, { wait: "30s" })` waits for the result. The JSON API behind both is under `/api/hw/`
+(`status`, `builds`, `builds/{id}`, `builds/{id}/events`, `builds/{id}/files/{name}`,
+`builds/{id}/load`). A load returns 409 when the build failed timing and the request lacks
+`"force": true`, and while a board session owns the board.
+
 ## What can go to hardware
 
 The design must name a board (`.board("gatemate-a1-evb")`, or any board whose resources the A1-EVB also
