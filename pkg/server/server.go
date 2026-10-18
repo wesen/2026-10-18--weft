@@ -1,5 +1,5 @@
-// Package server assembles the HTTP surface of `weft serve`: the Lab page, the artifact runtime
-// (pkg/artifacthost) and the hardware API (pkg/hw), all on one loopback origin.
+// Package server is the loopback HTTP server of `weft serve`. Handlers (the artifact host, the hardware
+// API) register on its mux; it adds the Host/Origin guard and shared JSON helpers.
 package server
 
 import (

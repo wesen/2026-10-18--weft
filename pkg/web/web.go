@@ -2,9 +2,11 @@
 //
 //   - static/lab.html: the Weft Lab page, built by weft-lab/app/build.mjs and copied here by `go generate`
 //     (gitignored; `make web` produces it).
-//   - static/runtime.js: the window.claude artifact runtime shim, copied unchanged from francois
+//   - static/runtime.js: the window.claude artifact runtime shim, copied from francois
 //     (github.com/go-go-golems/francois, pkg/web/static/runtime.js at commit d847ba4). It implements
 //     use("sample"), use("downloads") and friends against the /api/views endpoints of pkg/artifacthost.
+//     One local patch: the downloads extension allowlist also accepts v, sv, js, ccf, sdc, vcd, bit and
+//     yaml, because the Lab saves its Verilog (.v) and scripts (.js) through use("downloads").
 package web
 
 import (
