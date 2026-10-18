@@ -8,7 +8,8 @@
 import * as T from "./types.js";
 import { makeScope, Design, Module, Stream, Rom, Board, Group, Change, Agent, Host, WeftError, callSite, record, Builder, SCOPE_NAMES } from "./dsl.js";
 import { makeStd, Cell, cellInterface } from "./std.js";
-import { resolveBoard, bareBoard, expandResources } from "./boards.js";
+import { resolveBoard, bareBoard, expandResources, BOARDS } from "./boards.js";
+import { gatematePll } from "./gatemate-pll.js";
 import { parseLambda, locate, checkCaptures, parseHeader, syntaxCheck, topLevelNames, buildHir, HW_BUILTINS, HW_GLOBALS } from "./front.js";
 import { lower } from "./lower.js";
 import { runPipeline } from "./passes.js";
@@ -64,6 +65,12 @@ export function solvePll(fin, fout, family) {
     const err = Math.abs(hz - fout) / fout;
     if (!best || err < best.error - 1e-12) best = { hz, error: err, ...cfg };
   };
+  if (family === "gatemate") {
+    // CC_PLL as nextpnr configures it (SPEED mode, low jitter): the result is what the board will run at
+    const r = gatematePll(fin / 1e6, fout / 1e6);
+    if (!r) return { hz: fout, error: 1, impossible: true };
+    return { hz: r.fcore * 1e6, error: Math.abs(r.fcore * 1e6 - fout) / fout, k: r.K, n1: r.N1, n2: r.N2, m1: r.M1, m2: r.M2, pdiv1: r.PDIV1, vco: r.fdco * 1e6 };
+  }
   if (family === "ice40") {
     for (let r = 0; r <= 15; r++) for (let f = 0; f <= 127; f++) for (let q = 1; q <= 6; q++) {
       const pfd = fin / (r + 1);
@@ -127,7 +134,7 @@ export function elaborate(design, ctx) {
   if (d.targets) targets = d.targets.map((t) => ({ name: t.name, board: resolveBoard(t.spec), spec: t.spec }));
   else if (d.board) targets = [{ name: d.board.profile || "board", board: resolveBoard(d.board), spec: d.board }];
   else targets = [{ name: d.part || "sim", board: bareBoard(d.part || null) }];
-  for (const t of targets) if (!t.board) { err(`unknown board "${t.spec?.profile}" (pico, dev, studio)`, d.boardLine, "board"); t.board = bareBoard(); }
+  for (const t of targets) if (!t.board) { err(`unknown board "${t.spec?.profile}" (${Object.keys(BOARDS).join(", ")})`, d.boardLine, "board"); t.board = bareBoard(); }
   if (opts.board) {
     const b = resolveBoard(typeof opts.board === "string" ? opts.board : opts.board);
     if (b) targets.unshift({ name: b.profile || "board", board: b });

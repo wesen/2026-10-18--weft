@@ -256,7 +256,7 @@ export function emitVerilog(compiled) {
   }
   return out;
 }
-function pinParts(resource) {
+export function pinParts(resource) {
   const m = String(resource).match(/^(.*?)[:\[](\d+)\]?$/);
   return m ? { base: sanitize(m[1]), idx: +m[2], indexed: true } : { base: sanitize(resource), idx: 0, indexed: false };
 }

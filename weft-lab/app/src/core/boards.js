@@ -12,6 +12,9 @@ export const PART_DATA = {
   xc7a100t: { name: "xc7a100t", family: "xc7", luts: 63400, ffs: 126800, brams: 135, bramKb: 36, sprams: 0, spramKb: 0, dsps: 240, ios: 300, lut: "LUT6", delayClass: "xc7" },
   "lfe5u-25f": { name: "lfe5u-25f", family: "ecp5", luts: 24288, ffs: 24288, brams: 56, bramKb: 18, sprams: 0, spramKb: 0, dsps: 28, ios: 197, lut: "LUT4", delayClass: "ecp5" },
   "lfe5u-85f": { name: "lfe5u-85f", family: "ecp5", luts: 83640, ffs: 83640, brams: 208, bramKb: 18, sprams: 0, spramKb: 0, dsps: 156, ios: 365, lut: "LUT4", delayClass: "ecp5" },
+  // CCGM1A1 (GateMate A1): luts/ffs count CPE halves (CPE_LT/CPE_FF), as nextpnr-himbaechel reports them;
+  // BRAMs are 20 Kbit halves of the 32 40-Kbit blocks
+  ccgm1a1: { name: "ccgm1a1", family: "gatemate", luts: 40960, ffs: 40960, brams: 64, bramKb: 20, sprams: 0, spramKb: 0, dsps: 0, ios: 162, lut: "LUT4", delayClass: "gatemate" },
   generic: { name: "generic", family: "generic", luts: 1e6, ffs: 1e6, brams: 1000, bramKb: 36, sprams: 0, spramKb: 0, dsps: 1000, ios: 1000, lut: "LUT6", delayClass: "xc7" },
 };
 
@@ -23,6 +26,7 @@ export function partData(part) {
   if (p.startsWith("ice40")) return { ...PART_DATA.ice40up5k, name: p, part: p };
   if (p.startsWith("xc7")) return { ...PART_DATA.xc7a35t, name: p, part: p };
   if (p.startsWith("lfe5")) return { ...PART_DATA["lfe5u-85f"], name: p, part: p };
+  if (p.startsWith("ccgm1a")) return { ...PART_DATA.ccgm1a1, name: p, part: p };
   return { ...PART_DATA.generic, name: p, part: p };
 }
 export const familyOfPart = (part) => partData(part).family;
@@ -83,6 +87,28 @@ export const BOARDS = {
     },
     groups: { uart: ["uart.tx", "uart.rx"] },
   },
+};
+
+// A real board (unlike the profiles above): Olimex GateMateA1-EVB. The Go board package (pkg/board) owns
+// its pins and polarity; the pin names here are for display. Resources without a pin are virtual: they
+// compile like real ones so dev/pico examples still build, and on hardware they are tied inactive or
+// driven by the HIL bridge. btn:0 and btn:user are the same button (designs may bind one, not both).
+BOARDS["gatemate-a1-evb"] = {
+  profile: "gatemate-a1-evb",
+  title: "gatemate-a1-evb — Olimex GateMateA1-EVB (CCGM1A1), 1 LED + 7 on PMOD, 1 button, USB serial",
+  part: "ccgm1a1",
+  mainHz: 10e6,
+  clockPin: "clk",
+  resources: {
+    clk: { kind: "clock", dir: "in", pin: "IO_SB_A8", hz: 10e6 },
+    ...range("led", n(8), "led", "out", ["IO_SB_B6", "IO_EA_A4", "IO_EA_A5", "IO_EA_A6", "IO_EA_A7", "IO_EA_B4", "IO_EA_B5", "IO_EA_B6"]),
+    "btn:user": { kind: "button", dir: "in", pin: "IO_SB_B7" },
+    ...range("btn", n(4), "button", "in", ["IO_SB_B7", null, null, null]),
+    ...range("sw", n(8), "switch", "in", []),
+    "uart.tx": { kind: "uart", dir: "out", pin: "IO_SA_B6" },
+    "uart.rx": { kind: "uart", dir: "in", pin: "IO_SA_A6" },
+  },
+  groups: { uart: ["uart.tx", "uart.rx"], btn: ["btn:user"] },
 };
 
 // The board used when a design names none: a simulation-only profile (F-11) or a bare part (F-13, F-14).

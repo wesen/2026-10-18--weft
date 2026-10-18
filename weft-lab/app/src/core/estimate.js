@@ -14,6 +14,7 @@ export const PARTS = {
   "lfe5u-25f": { name: "lfe5u-25f", family: "ecp5", luts: 24288, ffs: 24288, brams: 56, bramKb: 18, sprams: 0, dsps: 28, ios: 197 },
   "lfe5u-45f": { name: "lfe5u-45f", family: "ecp5", luts: 43848, ffs: 43848, brams: 108, bramKb: 18, sprams: 0, dsps: 72, ios: 245 },
   "lfe5u-85f": { name: "lfe5u-85f", family: "ecp5", luts: 83640, ffs: 83640, brams: 208, bramKb: 18, sprams: 0, dsps: 156, ios: 365 },
+  ccgm1a1: { name: "ccgm1a1", family: "gatemate", luts: 40960, ffs: 40960, brams: 64, bramKb: 20, sprams: 0, dsps: 0, ios: 162 },
   generic: { name: "generic", family: "generic", luts: 1e6, ffs: 1e6, brams: 1000, bramKb: 36, sprams: 0, dsps: 1000, ios: 1000 },
 };
 export function partInfo(part) {
@@ -26,6 +27,7 @@ export function partInfo(part) {
   if (p.startsWith("ice40")) return { ...PARTS.ice40up5k, name: p };
   if (p.startsWith("xc7")) return { ...PARTS.xc7a35t, name: p };
   if (p.startsWith("lfe5")) return { ...PARTS["lfe5u-85f"], name: p };
+  if (p.startsWith("ccgm1a")) return { ...PARTS.ccgm1a1, name: p };
   return PARTS.generic;
 }
 // families: LUT inputs, delay model (ns), cell names, memory primitives
@@ -49,6 +51,14 @@ export const FAMILY = {
     dsp: { a: 18, b: 18, delay: 4.0 }, lutram: true,
     bram: { kb: 18, configs: [[16384, 1], [8192, 2], [4096, 4], [2048, 9], [1024, 18], [512, 36]] },
     cells: { lut: "LUT4", carry: "CCU2C", carryBits: 2, ff: "TRELLIS_FF", dsp: "MULT18X18D", bram: "DP16KD", io: "TRELLIS_IO", lutram: "TRELLIS_DPR16X4" },
+  },
+  // GateMate: delays are a first guess fitted to one nextpnr run (a 25-bit counter closes at ~91 MHz);
+  // calibrate against `weft build` reports as they come in. No hard multipliers: CC_MULT is built from CPEs.
+  gatemate: {
+    name: "GateMate", k: 4, lut: 0.9, route: 1.2, carryPerBit: 0.28, overhead: 1.5, bramDelay: 3.0,
+    dsp: { a: 16, b: 16, delay: 8.0 }, lutram: false, ffRam: 16,
+    bram: { kb: 20, configs: [[16384, 1], [8192, 2], [4096, 5], [2048, 10], [1024, 20], [512, 40]] },
+    cells: { lut: "CC_LUT4", carry: "CC_ADDF", carryBits: 1, ff: "CC_DFF", dsp: "CC_MULT", bram: "CC_BRAM_20K", io: "CC_IBUF/CC_OBUF", lutram: null },
   },
 };
 FAMILY.generic = { ...FAMILY.xc7, name: "generic" };
