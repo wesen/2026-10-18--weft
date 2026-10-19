@@ -24,6 +24,7 @@ type BuildOptions struct {
 	WorkDir     string
 	Seed        int
 	ButtonReset string
+	HIL         bool // add the HIL bridge (board.WrapOptions.HIL)
 }
 
 // Build is one finished (or failed) build.
@@ -55,7 +56,7 @@ func Wrap(bn *bundle.Bundle, opt BuildOptions) (*board.Board, *board.Wrapped, er
 	if err != nil {
 		return nil, nil, err
 	}
-	w, err := b.Wrap(bn, board.WrapOptions{ButtonReset: opt.ButtonReset})
+	w, err := b.Wrap(bn, board.WrapOptions{ButtonReset: opt.ButtonReset, HIL: opt.HIL})
 	return b, w, err
 }
 

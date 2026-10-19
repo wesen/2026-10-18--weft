@@ -59,6 +59,7 @@ type Report struct {
 	Clocks      []ClockTiming     `json:"clocks,omitempty"`
 	PLLs        []PLLCheck        `json:"plls,omitempty"`
 	Virtual     []string          `json:"virtual,omitempty"`
+	HIL         *board.HILMap     `json:"hil,omitempty"` // the build carries the HIL bridge
 	Bitstream   *Bitstream        `json:"bitstream,omitempty"`
 	Error       string            `json:"error,omitempty"`
 }
@@ -88,7 +89,7 @@ type BuildRequest struct {
 // bitstream exists (OK) and whether timing passed (TimingOK); the error is non-nil only when the build could
 // not be attempted (files, toolchain) or the context ended.
 func (s *Suite) Build(ctx context.Context, req BuildRequest, ev Events) (*Report, error) {
-	r := &Report{Design: req.Bundle.Design, Board: req.Board.Name, Seed: req.Seed, Virtual: req.Wrapped.Virtual}
+	r := &Report{Design: req.Bundle.Design, Board: req.Board.Name, Seed: req.Seed, Virtual: req.Wrapped.Virtual, HIL: req.Wrapped.HIL}
 	if err := writeSources(req); err != nil {
 		return nil, err
 	}

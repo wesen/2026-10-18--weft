@@ -61,7 +61,10 @@ type Manager struct {
 
 	boardMu   sync.Mutex // one board operation (load, detect, session) at a time
 	boardBusy atomic.Bool
-	session   atomic.Bool // set by the board session (P8): loads answer 409 instead of waiting
+	session   atomic.Bool // set while a board session holds the board: loads answer 409 instead of waiting
+
+	sessMu sync.Mutex
+	sess   *Session
 
 	mu   sync.Mutex
 	jobs map[string]*Job
@@ -85,15 +88,15 @@ func NewManager(ctx context.Context, suite *toolchain.Suite, suiteErr error, opt
 	return m
 }
 
-// Close cancels running jobs and waits for them to write their final state.
+// Close ends the board session, cancels running jobs and waits for them to write their final state.
 func (m *Manager) Close() error {
+	if m.Session() != nil {
+		_ = m.CloseSession()
+	}
 	m.cancel()
 	m.wg.Wait()
 	return nil
 }
-
-// SetSession marks the board as owned by a board session (or releases it).
-func (m *Manager) SetSession(open bool) { m.session.Store(open) }
 
 // BuildRequest is one build submitted through the API.
 type BuildRequest struct {
@@ -102,6 +105,7 @@ type BuildRequest struct {
 	Load        bool
 	Force       bool
 	ButtonReset string
+	HIL         bool
 	Validate    []string          // ladder levels to run after the build
 	Vectors     *validate.Vectors // needed by the rtl and net levels
 }
@@ -114,7 +118,7 @@ func (m *Manager) Submit(req BuildRequest) (*Job, error) {
 	if err := checkLevels(req.Validate, req.Vectors); err != nil {
 		return nil, err
 	}
-	p, err := prepare(req.Bundle, BuildOptions{WorkDir: m.opt.WorkDir, Seed: req.Seed, ButtonReset: req.ButtonReset})
+	p, err := prepare(req.Bundle, BuildOptions{WorkDir: m.opt.WorkDir, Seed: req.Seed, ButtonReset: req.ButtonReset, HIL: req.HIL})
 	if err != nil {
 		return nil, err
 	}
@@ -258,13 +262,20 @@ func (m *Manager) Load(id string, force bool) (*Job, error) {
 // load runs openFPGALoader under the board lock and finishes the job.
 func (m *Manager) load(j *Job) {
 	m.boardMu.Lock()
-	m.boardBusy.Store(true)
-	defer func() { m.boardBusy.Store(false); m.boardMu.Unlock() }()
+	defer m.boardMu.Unlock()
 	if m.session.Load() {
 		j.skipStage("load", ErrBoardSession.Error())
 		j.finish(StateDone, ErrBoardSession.Error())
 		return
 	}
+	_ = m.loadLocked(j)
+}
+
+// loadLocked loads the job's bitstream (the caller holds the board lock), records the load and finishes
+// the job; it returns the load's error.
+func (m *Manager) loadLocked(j *Job) error {
+	m.boardBusy.Store(true)
+	defer m.boardBusy.Store(false)
 	j.mu.Lock()
 	bit := filepath.Join(j.Dir, j.report.Bitstream.Path)
 	j.mu.Unlock()
@@ -284,13 +295,14 @@ func (m *Manager) load(j *Job) {
 	j.mu.Unlock()
 	if m.ctx.Err() != nil {
 		j.finish(StateInterrupted, "the server stopped during the load")
-		return
+		return m.ctx.Err()
 	}
 	if err != nil {
 		j.finish(StateDone, "load failed: "+err.Error())
-		return
+		return err
 	}
 	j.finish(StateDone, "")
+	return nil
 }
 
 // Job returns a job by id, or nil.

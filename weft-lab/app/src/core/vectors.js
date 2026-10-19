@@ -27,12 +27,16 @@ import { compile } from "./compile.js";
 import { buildBundle, HwError } from "./hardware.js";
 import { pinParts, emitVerilog } from "./verilog.js";
 import { runScenario } from "./scenario.js";
+import { expandResources } from "./boards.js";
 
 export const VECTORS_SCHEMA = "weft.vectors/v1";
 export const DEFAULT_COSIM_HZ = 1e6;
 
 // scenario steps that change the design or its internals rather than its pins: the RTL cannot follow them
 const INTERNAL = new Set(["poke", "force", "release", "knob", "apply", "patch", "change", "reload", "restore", "irq"]);
+// release() of board resources lets go of a button; of a signal path, it ends a poke
+const isInternal = (compiled, s) => INTERNAL.has(s.op) &&
+  !(s.op === "release" && expandResources(s.args?.[0] ?? "", compiled.board).every((r) => r in (compiled.board?.resources || {})));
 
 export async function vectors(script, { file = "design.js", board = "gatemate-a1-evb", cosimHz = DEFAULT_COSIM_HZ, scenario = null } = {}) {
   const base = compile(script, { board, file });
@@ -59,7 +63,7 @@ export async function vectors(script, { file = "design.js", board = "gatemate-a1
 }
 
 async function record(compiled, bundle, sc) {
-  const internal = (sc.steps || []).find((s) => INTERNAL.has(s.op));
+  const internal = (sc.steps || []).find((s) => isInternal(compiled, s));
   if (internal) return { name: sc.name, skip: `step ${internal.op}(${JSON.stringify(internal.args?.[0] ?? "")}) changes the design's internals, which the RTL's ports cannot reproduce` };
   const ports = new Map(bundle.ports.map((p, i) => [p.name, { i, dir: p.dir, value: 0n }]));
   const changes = [];
@@ -104,7 +108,7 @@ async function record(compiled, bundle, sc) {
 
 // the same recording for a design cut at its cells: every change of a domain-module port, as node values
 async function recordCut(compiled, cut, sc) {
-  const internal = (sc.steps || []).find((s) => INTERNAL.has(s.op));
+  const internal = (sc.steps || []).find((s) => isInternal(compiled, s));
   if (internal) return { name: sc.name, skip: `step ${internal.op}(${JSON.stringify(internal.args?.[0] ?? "")}) changes the design's internals, which the RTL's ports cannot reproduce` };
   const ports = cut.map((p, i) => ({ ...p, i, value: 0n }));
   const byNode = new Map(ports.map((p) => [p.node, p]));

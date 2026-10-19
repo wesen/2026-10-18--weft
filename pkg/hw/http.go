@@ -14,6 +14,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/wesen/2026-10-18--weft/pkg/bundle"
+	"github.com/wesen/2026-10-18--weft/pkg/hil"
 	"github.com/wesen/2026-10-18--weft/pkg/server"
 	"github.com/wesen/2026-10-18--weft/pkg/validate"
 )
@@ -30,6 +31,7 @@ func (m *Manager) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hw/builds/{id}/files/{name...}", m.handleFile)
 	mux.HandleFunc("POST /api/hw/builds/{id}/load", m.handleLoad)
 	mux.HandleFunc("POST /api/hw/builds/{id}/validate", m.handleValidate)
+	m.registerSession(mux)
 }
 
 func (m *Manager) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -60,10 +62,6 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		server.Fail(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if req.HIL {
-		server.Fail(w, http.StatusNotImplemented, "unsupported", "the HIL bridge is not implemented yet")
-		return
-	}
 	vec, err := parseVectors(req.Vectors)
 	if err != nil {
 		server.Fail(w, http.StatusUnprocessableEntity, "bad_vectors", err.Error())
@@ -82,7 +80,7 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Seed != nil {
 		seed = *req.Seed
 	}
-	j, err := m.Submit(BuildRequest{Bundle: bn, Seed: seed, Load: req.Load, Force: req.Force, ButtonReset: req.ButtonReset, Validate: req.Validate, Vectors: vec})
+	j, err := m.Submit(BuildRequest{Bundle: bn, Seed: seed, Load: req.Load, Force: req.Force, ButtonReset: req.ButtonReset, HIL: req.HIL, Validate: req.Validate, Vectors: vec})
 	if err != nil {
 		m.failWith(w, err)
 		return
@@ -289,6 +287,18 @@ func (m *Manager) failWith(w http.ResponseWriter, err error) {
 		server.Fail(w, http.StatusConflict, "busy", err.Error())
 	case errors.Is(err, ErrBoardSession):
 		server.Fail(w, http.StatusConflict, "board_session", err.Error())
+	case errors.Is(err, ErrSessionOpen):
+		server.Fail(w, http.StatusConflict, "session_open", err.Error())
+	case errors.Is(err, ErrNoSession):
+		server.Fail(w, http.StatusNotFound, "no_session", err.Error())
+	case errors.Is(err, ErrBoardBusy):
+		server.Fail(w, http.StatusConflict, "board_busy", err.Error())
+	case errors.Is(err, ErrMode):
+		server.Fail(w, http.StatusConflict, "mode", err.Error())
+	case errors.Is(err, hil.ErrNotInput):
+		server.Fail(w, http.StatusBadRequest, "not_input", err.Error())
+	case errors.Is(err, hil.ErrBridge):
+		server.Fail(w, http.StatusBadGateway, "board", err.Error())
 	case errors.Is(err, ErrNeedsForce):
 		server.Fail(w, http.StatusConflict, "needs_force", "this build failed timing; load it with force to try it anyway")
 	case errors.Is(err, ErrNoBitstream):

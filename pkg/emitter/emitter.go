@@ -8,6 +8,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,8 +82,71 @@ func Vectors(ctx context.Context, node, script string, opt VectorsOptions) (*val
 	return validate.Parse(out)
 }
 
+// BoardOptions select what weft-hw.mjs board runs.
+type BoardOptions struct {
+	Board    string
+	URL      string // the hardware API (weft serve, or weft validate's own)
+	Build    string // a finished build to open the board session on
+	Scenario string // "" for every scenario
+	Force    bool   // load even when the build failed timing
+	Progress io.Writer
+}
+
+// BoardStep is one step of a scenario run on the board.
+type BoardStep struct {
+	Label string  `json:"label"`
+	OK    *bool   `json:"ok"`
+	Note  string  `json:"note"`
+	Time  float64 `json:"time"` // ms since the scenario started (board cycles with the HIL bridge)
+}
+
+// BoardResult is one scenario run on the board (src/core/hwscenario.js).
+type BoardResult struct {
+	Name    string      `json:"name"`
+	Status  string      `json:"status"` // pass | fail | skip
+	Message string      `json:"message"`
+	Ms      int64       `json:"ms"`
+	Cycles  int64       `json:"cycles"`
+	Steps   []BoardStep `json:"steps"`
+}
+
+// BoardRun is what weft-hw.mjs board prints: the session it opened and one result per scenario.
+type BoardRun struct {
+	Session struct {
+		Mode   string `json:"mode"`
+		Design string `json:"design"`
+	} `json:"session"`
+	Results []BoardResult `json:"results"`
+}
+
+// RunOnBoard opens a board session through the hardware API, runs the design's portable scenarios on the
+// board and closes the session. Steps go to opt.Progress as they finish.
+func RunOnBoard(ctx context.Context, node, script string, opt BoardOptions) (*BoardRun, error) {
+	args := []string{"board", script, "--board", opt.Board, "--url", opt.URL, "--build", opt.Build}
+	if opt.Scenario != "" {
+		args = append(args, "--scenario", opt.Scenario)
+	}
+	if opt.Force {
+		args = append(args, "--force")
+	}
+	out, err := runTo(ctx, node, opt.Progress, args...)
+	if err != nil {
+		return nil, err
+	}
+	var r BoardRun
+	if err := json.Unmarshal(out, &r); err != nil {
+		return nil, errors.Wrap(err, "weft-hw.mjs board")
+	}
+	return &r, nil
+}
+
 // run executes the embedded weft-hw.mjs; exit 2 is a refusal (*Error).
 func run(ctx context.Context, node string, args ...string) ([]byte, error) {
+	return runTo(ctx, node, nil, args...)
+}
+
+// runTo is run with stderr also copied to progress (when not nil) as it arrives.
+func runTo(ctx context.Context, node string, progress io.Writer, args ...string) ([]byte, error) {
 	code, err := Script()
 	if err != nil {
 		return nil, err
@@ -99,6 +163,9 @@ func run(ctx context.Context, node string, args ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, node, append([]string{tool}, args...)...)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if progress != nil {
+		cmd.Stderr = io.MultiWriter(&stderr, progress)
+	}
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == 2 {

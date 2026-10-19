@@ -9,12 +9,13 @@ const sec = (ms) => (ms == null || ms === 0 ? "" : ms < 1000 ? `${ms} ms` : `${(
 const when = (t) => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); };
 
 // The Hardware tab: build the editor's design for the GateMateA1-EVB with `weft serve`, watch the toolchain,
-// compare the Lab's estimate with nextpnr, and load the bitstream.
+// compare the Lab's estimate with nextpnr, load the bitstream, and run it in a board session.
 export function HardwareTab() {
   useLab("hw", "compiled");
   useEffect(() => {
     hw.refreshStatus().catch(() => {});
     hw.refreshBuilds().then((b) => { if (!hw.current && b.length) hw.select(b[0].id); }).catch(() => {});
+    hw.refreshSession().catch(() => {});
   }, []);
   const j = hw.job;
   const run = (fn) => fn().catch((e) => { if (!(e instanceof HwError)) lab.toast(e.message, "bad"); });
@@ -31,15 +32,99 @@ export function HardwareTab() {
           {j?.timingOk === false ? "Load anyway" : "Load"}
         </Btn>
         <label className="lbl">seed <input type="number" min="0" className="seed" value={hw.seed} onChange={(e) => { hw.seed = Math.max(0, +e.target.value | 0); hw.bump(); }} /></label>
+        <label className="lbl" title="Add the HIL bridge on the board's UART: a board session can then read every output in board cycles and drive every input (designs that use the UART cannot have it)">
+          <input type="checkbox" checked={hw.hil} onChange={(e) => { hw.hil = e.target.checked; hw.bump(); }} /> HIL</label>
         <span className="sp" />
         <StatusLine />
       </div>
       <div className="scroll report">
         {hw.refusal ? <Refusal r={hw.refusal} /> : null}
+        {j?.ok || hw.session || hw.boardRun ? <OnBoard j={j} run={run} /> : null}
         {j ? <Build j={j} /> : <p className="empty padded">No build yet. <b>Build</b> compiles the editor's design for the GateMateA1-EVB and runs yosys, nextpnr and gmpack; <b>Build and load</b> also writes it to the FPGA's SRAM (lost at power-off).</p>}
         <Builds />
       </div>
     </div>
+  );
+}
+
+// the board session (guide §6.10, §6.12): the build on the board, its pins in board cycles through the HIL
+// bridge (or its UART text), and the editor's scenarios run there
+function OnBoard({ j, run }) {
+  const s = hw.session, br = hw.boardRun;
+  const other = s && j && s.build !== j.id;
+  const hil = j?.report?.hil;
+  const note = s ? `session ${s.session} · ${s.mode} · ${s.build}` : hil ? "this build carries the HIL bridge" : j?.ok ? "no HIL bridge: tick HIL and build again to read outputs and drive inputs (a design on the UART runs its UART scenarios without it)" : "";
+  return (
+    <section className="rsec">
+      <h3>On the board <span className="dim">· {note}</span></h3>
+      <div className="hwbtns">
+        {!s ? <Btn disabled={!j?.ok || hw.busy} onClick={() => run(() => hw.openSession(j.id, { force: j.timingOk === false }))}
+          title="Load the shown build and hold the board for this page: no other load until the session closes">Open session</Btn>
+          : <Btn onClick={() => run(() => hw.closeSession())}>Close session</Btn>}
+        {s?.mode === "hil" ? <Btn onClick={() => run(() => hw.resetBoard())} title="Reset the design; the cycle count restarts at 0">Reset design</Btn> : null}
+        <Btn disabled={!j?.ok || br?.running || other} onClick={() => run(() => hw.runOnBoard({ id: j.id, force: j.timingOk === false }))}
+          title={other ? `the open session is on ${s.build}` : "Run the editor's portable scenarios on the board, each from a reset, timed in board cycles"}>Run scenarios on board</Btn>
+      </div>
+      {s?.mode === "hil" ? <HilPins s={s} /> : null}
+      {s?.mode === "uart" ? <UartPane /> : null}
+      {br ? <BoardRun br={br} /> : null}
+    </section>
+  );
+}
+
+function HilPins({ s }) {
+  const st = s.state || {};
+  const set = (res, v) => hw.setInputs({ [res]: v }).catch((e) => lab.toast(e.message, "bad"));
+  return (
+    <div className="hwpins">
+      <div className="ledrow-b">{s.outputs.map((p) => (
+        <span key={p.resource} className="ledcell" title={`${p.resource} = ${hw.pins[p.resource] ? 1 : 0}`}>
+          <span className={cls("led", hw.pins[p.resource] && "on")} style={{ opacity: hw.pins[p.resource] ? 1 : 0.22 }} /><span className="tiny">{p.resource}</span>
+        </span>
+      ))}</div>
+      {s.inputs.length ? <div className="hwbtns">{s.inputs.map((p) => {
+        const v = st.inputs?.[p.resource] ?? 0, taken = !p.physical || (st.overrides || []).includes(p.resource);
+        return (
+          <span key={p.resource} className="hwin">
+            <Btn sm onClick={() => set(p.resource, v ? 0 : 1)} title={p.physical ? (taken ? "taken over from the pin" : "follows the physical pin; click to take it over") : "virtual: the bridge drives it"}>
+              {p.resource} {taken ? (v ? "▣ 1" : "□ 0") : "· pin"}</Btn>
+            {p.physical && taken ? <button type="button" className="ibtn" title="Give it back to the physical pin" onClick={() => set(p.resource, null)}>↩</button> : null}
+          </span>
+        );
+      })}</div> : null}
+      <p className={cls("note", (st.lost || st.gaps) && "bad", !(st.lost || st.gaps) && "dim")}>cycle {(st.cycle ?? 0).toLocaleString()} · {st.changes ?? 0} output changes since the reset{st.lost ? ` · ${st.lost} lost (overflow)` : ""}{st.gaps ? ` · ${st.gaps} report lines lost` : ""}</p>
+    </div>
+  );
+}
+
+function UartPane() {
+  const [text, setText] = useState("");
+  const send = () => { if (!text) return; hw.sendUart(text.replace(/\\n/g, "\n")).then(() => setText("")).catch((e) => lab.toast(e.message, "bad")); };
+  return (
+    <div className="hwpins">
+      <pre className="hwlog">{hw.uart || "(nothing received yet)"}</pre>
+      <div className="hwbtns"><input className="hwsend" value={text} placeholder="text to send (\n for a newline)" onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} /><Btn sm onClick={send}>Send</Btn></div>
+    </div>
+  );
+}
+
+function BoardRun({ br }) {
+  const rows = br.results;
+  return (
+    <>
+      <table className="rt">
+        <thead><tr><th>scenario</th><th>result</th><th className="num">board cycles</th><th className="num">time</th><th>details</th></tr></thead>
+        <tbody>{rows.map((r) => (
+          <tr key={r.name} className={cls(r.status === "fail" && "badrow")} title={r.steps.map((s) => `${s.ok === false ? "FAIL" : "ok"} ${s.label}${s.note ? " — " + s.note : ""}`).join("\n")}>
+            <td className="nm">{r.name}</td><td className={r.status === "pass" ? "ok" : r.status === "fail" ? "bad" : "dim"}>{r.status}</td>
+            <td className="num">{r.cycles ? r.cycles.toLocaleString() : ""}</td><td className="num">{sec(r.ms)}</td><td className="lastmsg">{r.message || ""}</td>
+          </tr>
+        ))}
+        {br.running ? <tr className="sel"><td className="nm">{br.current || "…"}</td><td>running…</td><td /><td /><td className="lastmsg">{br.steps.at(-1)?.label || "opening the session"}</td></tr> : null}
+        </tbody>
+      </table>
+      <p className="note dim">Each scenario starts from a reset of the design. Time is the board's cycle count from the HIL bridge, and an input takes effect at the cycle the bridge acknowledges (a millisecond or two after the step, over USB). With the design on the UART, time is the host's clock.</p>
+    </>
   );
 }
 
@@ -123,7 +208,7 @@ function Compare({ j }) {
         })}</tbody>
       </table>
       {(r.plls || []).length ? <p className="note">{r.plls.map((p) => `PLL ${p.domain}: asked ${p.wantMHz} MHz, the Lab modelled ${(+p.modelMHz).toFixed(4)}, nextpnr configured ${p.foutMHz} MHz ${p.ok ? "✓" : "✕"}`).join(" · ")}</p> : null}
-      {(r.virtual || []).length ? <p className="note">Virtual on this board (read as 0): {r.virtual.join(", ")}</p> : null}
+      {(r.virtual || []).length ? <p className="note">Virtual on this board ({r.hil ? "driven and read by the HIL bridge" : "inputs read as 0"}): {r.virtual.join(", ")}</p> : null}
       {j.timingOk === false ? <p className="note bad">At least one clock misses its target. The bitstream exists, but loading it is your call: it may work on the bench and fail when warm.</p> : null}
     </section>
   );

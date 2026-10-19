@@ -1,7 +1,7 @@
 ---
 Title: Validating a design against the Lab's simulator
 Slug: validation-ladder
-Short: "The validation ladder of weft validate: build, RTL co-simulation, netlist co-simulation."
+Short: "The validation ladder of weft validate: build, RTL co-simulation, netlist co-simulation, the board."
 Topics:
 - gatemate
 - toolchain
@@ -23,11 +23,12 @@ level and scenario:
 | `build` | synthesis, place and route and timing succeed for the A1-EVB (a full build, not loaded) | yosys, nextpnr, gmpack |
 | `rtl` | the emitted Verilog drives the same pins as the simulator, cycle by cycle, over each scenario | iverilog |
 | `net` | the same, against a GateMate netlist of that Verilog with the vendor cell models | yosys `synth_gatemate`, iverilog |
-| `board` | scenarios on the real board | not implemented yet |
+| `board` | the same scenarios on the real A1-EVB, through a board session, timed in board cycles | openFPGALoader, the HIL bridge |
 
     weft validate weft-lab/examples/F-02-counter.js
     weft validate weft-lab/examples/F-01-blinky.js --levels build,rtl,net
     weft validate design.js --scenario "counts up, then down" --levels rtl
+    weft validate weft-lab/examples/F-05-buttons.js --levels build,board
 
 The command fails when any check fails, so it works in scripts and CI.
 
@@ -50,6 +51,20 @@ scenario is 1.1 million cycles, a few seconds in iverilog and about half a minut
 Some scenarios cannot be replayed through ports. A scenario with a step that changes the design's
 internals (`poke`, `force`, `knob`, a hot patch, …) is skipped with the step named, and so is a design
 with more than one clock domain.
+
+## The board level
+
+`board` builds the design with the HIL bridge (plain when the design uses the UART itself), loads it in a
+board session and runs each scenario from a reset of the design. The bridge reports every output change
+with its cycle, and inputs change at the cycle the bridge acknowledges, so `wait("1.1s")` is 11,000,000
+board cycles and toggle counts are exact. The main clock runs at its real rate there, not at
+`--cosim-hz`. With `board` in `--levels`, the `build` row reports that HIL build ("with the HIL bridge").
+
+The board level goes through `weft serve` when serve answers on `--listen`. Serve then owns the board
+lock, so a run never loads over a session the Lab holds: it fails with `session_open` instead. Otherwise it mounts the hardware API in-process for the
+length of the run. `--serial` names the board's serial port, and `--force` loads a build that failed timing.
+Steps the board cannot reproduce skip the scenario, as in co-simulation. A lost report fails it. See
+`weft help board-session` for the bridge, the modes and what each step does on the board.
 
 ## Designs with native cells
 
@@ -77,4 +92,5 @@ The Hardware tab's **Validate** button records the vectors in the page, sends th
 shows the results as they come, with links to each scenario's change list, testbench and log. The agent
 calls `hw.validate()` and reads `hw.job(id).validation`. Over the API, a build request takes
 `"validate": ["build", "rtl", "net"]` and `"vectors"`, and `POST /api/hw/builds/{id}/validate` re-runs the
-ladder on a finished build.
+ladder on a finished build. The board level runs from the page under **On the board** (*Run scenarios on
+board*) and from the agent as `hw.runOnBoard()`.

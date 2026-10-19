@@ -212,4 +212,8 @@ table { font-size: inherit; }
 .hwlog { margin: 8px 0 0; max-height: 320px; overflow: auto; font: var(--fs-xs)/1.45 var(--mono); background: var(--code-bg); border: 1px solid var(--hair); padding: 6px 8px; white-space: pre; }
 .hwfiles { display: flex; flex-wrap: wrap; gap: 4px 14px; font-family: var(--mono); font-size: var(--fs-xs); }
 .rt.hwstages td.lastmsg { white-space: normal; }
+.hwbtns { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.hwpins { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.hwin { display: inline-flex; align-items: center; gap: 2px; font-family: var(--mono); }
+.hwsend { flex: 1; min-width: 12em; font: var(--fs-s) var(--mono); padding: 2px 6px; border: 1px solid var(--hair); background: var(--bg); color: var(--ink); }
 .rsec h3.bad { color: var(--accent); }

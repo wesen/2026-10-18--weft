@@ -128,6 +128,60 @@ func TestWrapRefusals(t *testing.T) {
 	}
 }
 
+// HIL: the bridge carries every input (btn:0 through a mux, the virtual ones directly) and every output, on
+// the UART pins; the design's reset also follows the bridge's R.
+func TestWrapHIL(t *testing.T) {
+	w := wrapGolden(t, "F-05-buttons-hil", loadBundle(t, "F-05-buttons"), WrapOptions{HIL: true})
+	h := w.HIL
+	if h == nil || h.Baud != 115200 || h.Hz != 10e6 || h.TX != "uart.tx" || h.RX != "uart.rx" {
+		t.Fatalf("hil = %+v", h)
+	}
+	var ins, outs []string
+	for _, p := range h.Inputs {
+		s := p.Resource
+		if p.Physical {
+			s += "*"
+		}
+		ins = append(ins, s)
+	}
+	for _, p := range h.Outputs {
+		outs = append(outs, p.Resource)
+	}
+	if strings.Join(ins, ",") != "sw:0,btn:0*,btn:1,btn:2,btn:3" || len(outs) != 8 || outs[7] != "led:7" {
+		t.Errorf("inputs %v outputs %v", ins, outs)
+	}
+	var cores []string
+	for _, f := range w.Cores {
+		cores = append(cores, f.Path)
+	}
+	if strings.Join(cores, ",") != "weft_core_debounce.v,weft_core_uart_rx.v,weft_core_uart_tx.v,weft_hil.v" {
+		t.Errorf("cores %v", cores)
+	}
+	top := w.Files[0].Text
+	for _, want := range []string{
+		"wire pin_btn_0_lvl = hil_ovr[1] ? hil_vins[1] : ~pin_btn_0;",
+		"wire pin_sw_0_lvl = hil_vins[0];",
+		"wire rst = rst_cfg | hil_rst;",
+		".rst(rst_cfg),",
+		"assign hil_outs[7] = d_led[7];  // led:7",
+		"weft_hil #(.CLK_HZ(10000000), .BAUD(115200), .NOUT(8), .NIN(5)) u_hil (",
+	} {
+		if !strings.Contains(top, want) {
+			t.Errorf("top lacks %q", want)
+		}
+	}
+	if !strings.Contains(w.CCF, `"pin_uart_tx" Loc = "IO_SA_B6"`) || !strings.Contains(w.CCF, `"pin_uart_rx" Loc = "IO_SA_A6"`) {
+		t.Errorf("ccf lacks the UART pins:\n%s", w.CCF)
+	}
+
+	// a design on the UART has no room for the bridge
+	bn := loadBundle(t, "F-01-blinky")
+	bn.Ports = append(bn.Ports, bundle.Port{Name: "tx", Dir: "out", Width: 1, Bits: []bundle.Bit{{Bit: 0, Resource: "uart.tx", Kind: "uart"}}})
+	if _, err := GateMateA1EVB.Wrap(bn, WrapOptions{HIL: true}); err == nil || !strings.Contains(err.Error(), "uart.tx") {
+		t.Errorf("HIL with the design on the UART: %v", err)
+	}
+}
+
 // The cores a bundle's cells name come with the wrapper, once each.
 func TestWrapCores(t *testing.T) {
 	bn := loadBundle(t, "F-01-blinky")

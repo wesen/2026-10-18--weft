@@ -28,6 +28,11 @@ A build has four steps, all visible as rows of `weft build`:
 
     weft build weft-lab/examples/F-01-blinky.js --load
     weft build bundle.json --seed 3 --verbose
+    weft build weft-lab/examples/F-05-buttons.js --hil --load
+
+`--hil` adds the HIL bridge to the board top. The bridge reports every output change over the board's UART
+and lets the host set every input, including the virtual buttons and switches. A board session uses it
+(`weft help board-session`). A design that uses the UART itself cannot have it.
 
 Everything lands in `var/weft/builds/<id>/`: the sources, `synth.log`, `pnr.log`, `report.json`
 (utilization, fmax per clock, PLL checks, bitstream hash) and `top.bit`.
@@ -78,4 +83,5 @@ control and drops what overflows its buffer, so a host should not send bursts mu
 of what comes back.
 
 On the A1-EVB, `led:0` and `btn:user` (alias `btn:0`) are the board's LED and button, `led:1..7` are PMOD
-pins, and `btn:1..3` and `sw:0..7` are virtual: they compile, and on the board they read as 0.
+pins, and `btn:1..3` and `sw:0..7` are virtual: they compile, and on the board they read as 0, unless the
+build carries the HIL bridge, which sets them from the host.

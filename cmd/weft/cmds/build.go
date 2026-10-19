@@ -27,6 +27,7 @@ type BuildSettings struct {
 	Load        bool   `glazed:"load"`
 	Force       bool   `glazed:"force"`
 	ButtonReset string `glazed:"button-reset"`
+	HIL         bool   `glazed:"hil"`
 	WorkDir     string `glazed:"work-dir"`
 	Suite       string `glazed:"oss-cad-suite"`
 	Node        string `glazed:"node"`
@@ -54,6 +55,7 @@ Everything lands in <work-dir>/builds/<id>/ (sources, logs, report.json, top.bit
 			fields.New("load", fields.TypeBool, fields.WithDefault(false), fields.WithHelp("Load the bitstream into SRAM after a successful build")),
 			fields.New("force", fields.TypeBool, fields.WithDefault(false), fields.WithHelp("With --load: load even when timing failed")),
 			fields.New("button-reset", fields.TypeString, fields.WithHelp("Also reset the design while this physical input is active (e.g. btn:user)")),
+			fields.New("hil", fields.TypeBool, fields.WithDefault(false), fields.WithHelp("Add the HIL bridge on the board's UART (see weft help board-session)")),
 			workDirFlag(),
 			suiteFlag(),
 			nodeFlag(),
@@ -77,7 +79,7 @@ func (c *BuildCommand) RunIntoGlazeProcessor(ctx context.Context, parsed *values
 		return err
 	}
 	ev := progress(s.Verbose)
-	b, err := hw.RunBuild(ctx, suite, bn, hw.BuildOptions{WorkDir: s.WorkDir, Seed: s.Seed, ButtonReset: s.ButtonReset}, ev)
+	b, err := hw.RunBuild(ctx, suite, bn, hw.BuildOptions{WorkDir: s.WorkDir, Seed: s.Seed, ButtonReset: s.ButtonReset, HIL: s.HIL}, ev)
 	if err != nil && b == nil {
 		return err
 	}

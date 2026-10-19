@@ -265,11 +265,11 @@ func TestTimingFailureNeedsForce(t *testing.T) {
 	if code != http.StatusConflict || errCode(out) != "needs_force" {
 		t.Fatalf("load without force = %d %v", code, out)
 	}
-	f.m.SetSession(true)
+	f.m.session.Store(true) // as a board session does
 	if code, out := f.do(t, "POST", "/api/hw/builds/"+id+"/load", map[string]any{"force": true}); code != http.StatusConflict || errCode(out) != "board_session" {
 		t.Fatalf("load during a session = %d %v", code, out)
 	}
-	f.m.SetSession(false)
+	f.m.session.Store(false)
 	if code, out := f.do(t, "POST", "/api/hw/builds/"+id+"/load", map[string]any{"force": true}); code != http.StatusAccepted {
 		t.Fatalf("load with force = %d %v", code, out)
 	}
@@ -289,9 +289,6 @@ func TestRefusalsAndBusy(t *testing.T) {
 	}
 	if code, out := f.do(t, "POST", "/api/hw/builds", map[string]any{"bundle": map[string]any{"schema": "nope"}}); code != http.StatusUnprocessableEntity || errCode(out) != "bad_bundle" {
 		t.Errorf("bad bundle = %d %v", code, out)
-	}
-	if code, _ := f.do(t, "POST", "/api/hw/builds", map[string]any{"bundle": bundleJSON(t, nil), "hil": true}); code != http.StatusNotImplemented {
-		t.Errorf("hil = %d", code)
 	}
 	if code, out := f.do(t, "POST", "/api/hw/builds", map[string]any{"bundle": bundleJSON(t, nil), "validate": []string{"rtl"}}); code != http.StatusUnprocessableEntity || errCode(out) != "refused" {
 		t.Errorf("rtl without vectors = %d %v", code, out)
