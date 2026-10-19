@@ -43,3 +43,12 @@ P6 (93f5da0): validation ladder L0-L2. vectors.js records scenario port changes 
 
 - /home/manuel/code/wesen/2026-10-18--weft/pkg/validate/run.go — co-simulation runner (RTL and netlist)
 - /home/manuel/code/wesen/2026-10-18--weft/weft-lab/app/src/core/vectors.js — records scenario port changes from the simulator
+
+## 2026-10-18
+
+P7 (c6e0dc0): hardware cores for debounce, uart-rx and uart-tx in hdl/cells with testbenches; generated adapters; co-simulation cut at the cell boundary. F-05 and F-16 pass L1/L2; F-16 echoes on the board (50,000 bytes at 115200). The uart-tx divider rounds down after a board test showed a 0.2 %-slow transmitter overrunning a 1:1 echo.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-10-18--weft/hdl/cells/weft_core_uart_tx.v — uart-tx core (divider rounded down)
+- /home/manuel/code/wesen/2026-10-18--weft/weft-lab/app/src/core/verilog.js — CELL_CORES and the generated adapters

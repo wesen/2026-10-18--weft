@@ -13,10 +13,14 @@ DocType: diary
 Intent: long-term
 Owners: []
 RelatedFiles:
+    - Path: repo://hdl/hdl.go
+      Note: embedded cell cores
     - Path: repo://pkg/hw/validate.go
       Note: validation inside hardware jobs
     - Path: repo://pkg/validate/testbench.go
       Note: testbench generation for L1/L2
+    - Path: repo://ttmp/2026/10/18/WEFT-001--weft-lab-go-backend-build-flash-and-validate-on-gatemate-a1-evb/scripts/07-uart-echo.py
+      Note: board UART echo check for F-16
 ExternalSources: []
 Summary: ""
 LastUpdated: 2026-10-18T18:09:36.261047227-04:00
@@ -847,3 +851,149 @@ scenario was skipped with its reason.
   netlist.v`, simulated with `share/yosys/gatemate/cells_sim.v`.
 - Files: `var/weft/validate/<id>/` (CLI) or `var/weft/builds/<id>/validate/` (jobs): `rtl/`, `net/`,
   `sc-<scenario>/{tb.v, changes.txt, <port>.mem, rtl.log, net.log, rtl-compile.log, net-compile.log}`.
+
+## Step 9: P7 — hardware cores for debounce, uart-rx and uart-tx; adapters; co-simulation cut at the cells
+
+P7 lets designs with the Lab's native cells go to the board. Three hand-written cores live in `hdl/cells/`
+(embedded in the binary by a small `hdl` package), each with a self-checking testbench. The emitter replaces
+the cells' black boxes with adapters that keep the same interface and instantiate the core, and the build
+adds the cores. Co-simulation of such designs cuts at the cell boundary: the domain module is the device
+under test, fed with what the cells drive and checked on what they read.
+
+Every exit check holds: the three testbenches pass, F-05 bundles (debounce adapter) and passes L1 and L2,
+F-16 passes L1 and L2 with its UART cells cut out, and F-16 echoes on the board through `/dev/ttyACM0`. The
+board test also found a real problem the testbench could not: a transmitter that is 0.2 % slow loses bytes in
+a design that forwards them 1:1. After the fix, 50,000 bytes echo intact at the full line rate.
+
+### Prompt Context
+
+**User prompt (verbatim):** see Step 1. During this phase the user asked: "are you using WASM for the
+bitstream creation and all that?" (answered: no; yosys, nextpnr, gmpack, openFPGALoader and iverilog are the
+native OSS CAD Suite binaries, run by the Go server; only the Weft compiler is JavaScript).
+**Assistant interpretation:** Phase P7 of the guide (§6.6, §6.10, §9 step 7).
+**Inferred user intent:** Designs that use the Lab's UART and button components run on the real board.
+**Commit (code):** c6e0dc0 — "P7: cores for debounce, uart-rx and uart-tx; adapters; co-simulation cut at the cells"
+
+### What I did
+- Cores (`hdl/cells/`):
+  - `weft_core_uart_tx #(CLK_HZ, BAUD)`: 8N1, valid/ready sink, ready while idle, divider `CLK_HZ/BAUD`
+    rounded down.
+  - `weft_core_uart_rx #(CLK_HZ, BAUD)`: two-flop synchronizer, falling-edge start, start bit checked at
+    half a bit, mid-bit sampling with a whole-bit counter, low stop bit drops the frame, one-byte holding
+    register (`m_valid` until `m_ready`).
+  - `weft_core_debounce #(N, ID_W, SETTLE_CYC, LONG_CYC)`: per-input settle counter (the model's
+    `t - since >= settle` in cycles), `held`, short event on release, long event at `LONG_CYC` after the press
+    counted (then nothing on release), one pending event per input, lowest id first.
+  - Each header lists where it differs from the JS model.
+- Testbenches (`hdl/cells/tb/`), run by `go test ./hdl` (`TestCoreTestbenches`, skipped with `-short`):
+  - uart-tx: 5 bytes back to back decoded at the nominal rate, start and stop bits, `s_ready` low time.
+  - uart-rx: nominal and ±2.5 % baud, presentation time, the holding register losing a second byte, a glitch,
+    a low stop bit.
+  - debounce: bouncy press and release, a glitch, a long press, a short press, a stalled consumer — all at
+    exact cycles derived from the model's rule.
+- `verilog.js`: `CELL_CORES` (kind → core, per-instance parameters from the cell and its domain clock, and a
+  `wire` function that maps the cell's stream roles from `groupIO` to core ports, or returns a reason).
+  `cellStubs` records each port's io key or pin name and builds the adapter plan. `emitCellStubs` writes an
+  adapter module, or a black box for kinds without a core. Domain file entries now carry `module`, `domain`
+  and `ports`.
+- `hardware.js`: uses that table; refuses a cell without a core (`cells`) and one whose interface does not fit
+  its core; `cells[].module` names the core.
+- Go: `hdl.Core`/`hdl.Modules`; `board.Wrap` adds the named cores to `Wrapped.Cores` (an unknown core is a
+  refusal); the toolchain writes them to `cells/` and reads them in `synth.ys`.
+- Co-simulation cut: `vectors.js` adds `dut: { module, file, ports }` for designs with cells and records
+  every domain-module port as node values (`recordCut`). `pkg/validate` gets `DUT`, a port abstraction shared
+  by both modes (`Vectors.ports()`), `Generate(v, s)`, and L1/L2 that compile and synthesize only the DUT's
+  file in cut mode.
+- Tests: `TestWrapCores` and an "unknown core" refusal in `pkg/board`; `TestGenerateCut` and F-05/F-16 in
+  `TestCosimExamples`; JS tests for the adapter text, the sigma-delta refusal, and cut-mode vectors of F-05
+  and F-16.
+- Help topics: cores and the A1-EVB UART in `build-and-flash`, "Designs with native cells" in
+  `validation-ladder`; the Hardware tab and the agent's `HW_SCOPE` say the same in a sentence.
+- `scripts/07-uart-echo.py`: sends text to `/dev/ttyACM0` and prints what comes back.
+
+### Why
+- **Adapters with the stub's interface.** The top-level wiring from P3–P6 stays exactly as it was; only the
+  cell module's body changes. Stream names differ per design (`presses_valid`, `rx_bytes_data`), so only
+  generated code can map them to fixed core ports.
+- **Cycle counts computed in JavaScript.** The adapter receives `SETTLE_CYC`/`LONG_CYC` (or `CLK_HZ`/`BAUD`)
+  from the top, computed from the domain's `hz`, so fractional milliseconds and non-integer MHz clocks need no
+  32-bit Verilog parameter arithmetic.
+- **A whole-bit counter in the receiver, not 16× oversampling.** At 10 MHz, `CLK_HZ/BAUD/16` is 5.43; a
+  divider of 5 is 8.5 % off, 87 for a whole bit is 0.16 % off.
+- **Recording the cut from the simulator's own hooks.** A cell ticks inside edge k after the graph is
+  evaluated (`sim.js` edge body: values, pin observers, `X.tick()`, commit), so a read value belongs to cycle k
+  and a drive is first seen by edge k + 1. Wrapping `sim._tick` (one call per edge, before and after the cells)
+  keeps the change list in cycle order even with several cells.
+
+### What worked
+- Testbenches: `WEFT-TB PASS weft_core_uart_tx (5 bytes, DIV 86)`, `WEFT-TB PASS weft_core_uart_rx (latency
+  9.547 bit times)`, `WEFT-TB PASS weft_core_debounce (5 events)`.
+- GateMate synthesis of the cores alone: uart-tx 79 cells (20 `CC_DFF`), uart-rx 89 (31), debounce with N=4,
+  10 ms and 500 ms at 10 MHz 980 cells (180 `CC_DFF`).
+- Builds: F-16 `shout` CPE_LT 299, CPE_FF 91, 75.48 MHz; F-05 `lights` CPE_LT 774, CPE_FF 190, 41.35 MHz
+  (both PASS at 10 MHz).
+- Co-simulation, cut at the cells: F-05 rtl 10.0 s and net 13.1 s (761,000 cycles); F-16 rtl 59 ms and net
+  134 ms (1,328 cycles). `weft validate weft-lab/examples/F-16-targets.js --levels build,rtl,net` passes.
+- Board, F-16 loaded (44 ms): `sent b'hello, fabric\n'` → `got b'HELLO, FABRIC\n' after 3.9 ms`; `The Quick
+  Brown Fox 123 {xyz}~` → `THE QUICK BROWN FOX 123 {XYZ}~`; 10,000 and 50,000 bytes intact at 115,200 baud
+  effective with at most 1 KB in flight.
+- `go test ./... -short`, `make lint`, `make js-test` (26 files) and `git diff --check` pass.
+
+### What didn't work
+- `release` is a Verilog keyword: my first debounce core named a wire `release`; renamed to `unpress`.
+- Two testbench failures were the testbenches' fault: they raised `m_ready`/`ev_ready` just after a falling
+  edge, the next rising edge took the waiting item, and the monitor (which samples at the falling edge) never
+  saw it: `WEFT-TB FAIL holding register: 0 bytes, want 1` and `WEFT-TB FAIL event 3: {1, 0} on edge 597,
+  want {0, 0} on edge 596`. Ready now rises just after a rising edge.
+- First board read returned `llo\r\nhello\r\nhello…`: F-06's output from earlier, buffered while nothing read
+  the port, most likely in the RP2040's USB CDC buffer (`tcflush` does not reach it). The script drains the
+  port first.
+- **Lost bytes with the first transmitter.** A 2000-byte burst came back as 1998 bytes, first difference at
+  byte 1442. The transmitter's divider was 87 (rounded to nearest: 114,943 baud, 0.22 % slow) while the
+  RP2040 sends at about 115,207 baud, so F-16's echo fell behind by one byte every few hundred and overran the
+  one-byte receive register once the pipeline's slack was used up. The model never falls behind (its rx and
+  tx rates are identical). The divider now rounds down (86: 116,279 baud, 0.94 % fast); the same burst comes
+  back intact.
+- **Lost bytes in the RP2040 bridge.** 10,000 bytes written at once came back as 1808, with a 14-byte gap at
+  byte 141 — before the FPGA. The kernel and USB took all 10,000 bytes in 18 ms; the bridge forwards USB data
+  without flow control and drops what overflows its buffer. Keeping at most 1 KB in flight fixes the test; the
+  `build-and-flash` topic now says so.
+- My first `07-uart-echo.py` ignored the return value of a non-blocking `os.write` and had a fixed 1 s
+  timeout.
+
+### What I learned
+- The board catches what a core testbench cannot: both the clock-ratio overrun and the bridge's lack of flow
+  control only show at the system level, with a real host on the other side.
+- Cut mode compiles and synthesizes only the DUT's file, so neither the top nor the adapters (which name
+  cores the RTL directory does not contain) take part in L1 or L2.
+
+### What was tricky to build
+- The cut's port list has to match what `emitTop` connects. Rather than describing it in the bundle, cut
+  mode calls `emitVerilog` again (it is deterministic) and reads the main domain module's port list from the
+  new `ports` field.
+
+### What warrants a second pair of eyes
+- The rounded-down transmitter is fast by less than one divider step, `BAUD/CLK_HZ` (0.94 % at 10 MHz, at
+  most 0.46 % at 25 MHz). That is fine for 115200 baud on this board; a very low `CLK_HZ/BAUD` ratio would
+  make it worse, and the adapter does not check.
+- `CELL_CORES.debounce.wire` assumes presses are `{ id, long }` with `long` in bit 0, which is what
+  `std.js` `cellInterface` produces today.
+- The F-05 board behaviour (the user button through the debounce core) is not tested by hand: `btn:1..3` and
+  `sw:0` are virtual on the A1-EVB, so only `btn:user` → `led:0` can be exercised.
+
+### What should be done in the future
+- P8: board-level scenarios through `weft_hil` and a board session; `scripts/07-uart-echo.py` becomes a
+  `uart`/`expectUart` step there.
+
+### Code review instructions
+- `hdl/cells/*.v` and their testbenches; `weft-lab/app/src/core/verilog.js` (`CELL_CORES`, `cellStubs`,
+  `emitCellStubs`); `vectors.js` (`recordCut`); `pkg/validate/vectors.go` (`DUT`, `ports`); `pkg/board/board.go`
+  (cores in `Wrap`).
+- `GOWORK=off go test ./hdl ./pkg/validate -count=1 -v`; with the board: `./bin/weft build
+  weft-lab/examples/F-16-targets.js --load`, then `python3 -I ttmp/.../scripts/07-uart-echo.py`.
+
+### Technical details
+- Adapter for F-05: `weft_debounce #(.LONG_CYC(5000000), .SETTLE_CYC(100000)) u_buttons` →
+  `weft_core_debounce #(.N(4), .ID_W(2), ...)` with `.ev_id(presses_data[2:1]), .ev_long(presses_data[0])`.
+- F-16's cut DUT `shout_sys` ports: inputs `tx_bytes_out_ready`, `rx_bytes_valid`, `rx_bytes_data`,
+  `pin_uart_rx`; checked outputs `x_4` (tx valid), `x_7` (tx data), `x_10` (rx ready), `x_73` (the rx pin).
