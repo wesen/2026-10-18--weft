@@ -25,7 +25,7 @@ func load(t *testing.T, name string) *Vectors {
 
 func TestGenerate(t *testing.T) {
 	v := load(t, "F-02-counter")
-	tb, err := Generate(v.Bundle, &v.Scenarios[0])
+	tb, err := Generate(v, &v.Scenarios[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,10 +87,10 @@ func suite(t *testing.T) *toolchain.Suite {
 }
 
 // F-01 and F-02 pass L1 and L2 over their whole scenarios (P6's exit check); F-02's poking scenario is
-// skipped with its reason.
+// skipped with its reason. F-05 (debounce) and F-16 (uart-rx, uart-tx) pass cut at their cells (P7's check).
 func TestCosimExamples(t *testing.T) {
 	s := suite(t)
-	for _, name := range []string{"F-01-blinky", "F-02-counter"} {
+	for _, name := range []string{"F-01-blinky", "F-02-counter", "F-05-buttons", "F-16-targets"} {
 		t.Run(name, func(t *testing.T) {
 			v := load(t, name)
 			res, err := Run(context.Background(), s, t.TempDir(), v, []string{LevelRTL, LevelNet}, nil)
@@ -115,6 +115,36 @@ func TestCosimExamples(t *testing.T) {
 				t.Errorf("%d passing levels, want 2 (rtl and net of the first scenario)", passed)
 			}
 		})
+	}
+}
+
+// A design with cells is cut there: the testbench drives the domain module, feeding what the cells drive and
+// checking what they read (every bit of a checked port).
+func TestGenerateCut(t *testing.T) {
+	v := load(t, "F-16-targets")
+	if v.DUT == nil || v.DUT.Module != "shout_sys" {
+		t.Fatalf("dut = %+v, want shout_sys", v.DUT)
+	}
+	tb, err := Generate(v, &v.Scenarios[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"shout_sys dut (",
+		".clk(clk),",
+		"reg  [7:0] p_rx_bytes_data = 0;", // a value the rx cell drives into the graph
+		"wire [7:0] p_x_7;",               // tx.bytes.data, read by the tx cell
+		"(p_x_7 & 8'hff) !== (want_x_7 & 8'hff)",
+	} {
+		if !strings.Contains(tb.Verilog, want) {
+			t.Errorf("testbench lacks %q", want)
+		}
+	}
+	if strings.Contains(tb.Verilog, "uart_tx") {
+		t.Error("the cut testbench reaches a cell-owned pin")
+	}
+	if got := v.ChangesText(&v.Scenarios[0]); !strings.Contains(got, "device under test shout_sys") || !strings.Contains(got, " rx_bytes_data 68\n") {
+		t.Errorf("change list:\n%.400s", got)
 	}
 }
 

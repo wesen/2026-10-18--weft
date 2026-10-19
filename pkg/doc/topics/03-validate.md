@@ -51,6 +51,16 @@ Some scenarios cannot be replayed through ports. A scenario with a step that cha
 internals (`poke`, `force`, `knob`, a hot patch, …) is skipped with the step named, and so is a design
 with more than one clock domain.
 
+## Designs with native cells
+
+The Lab models cells such as `std.uart.rx` at the transaction level (a byte appears at once, a frame time
+after it was sent), so comparing their hardware cores cycle by cycle would fail for reasons that are not
+bugs. Co-simulation therefore cuts such a design at the cell boundary. The device under test becomes the
+main domain's module (`<design>_<domain>`): the testbench feeds it what the cells drive into the graph (a
+byte stream's valid and data, a debouncer's events) and checks what the cells read from it (ready, the raw
+buttons, the bytes to send), every bit of each. Pins only a cell touches, such as `uart.tx`, are not checked
+there. Each core is checked against its model by its own testbench (`go test ./hdl`), and on the board.
+
 ## Files
 
 Each run keeps everything it used: under `var/weft/validate/<id>/` for the CLI, under

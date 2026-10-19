@@ -121,13 +121,16 @@ func writeRTL(dir string, v *Vectors) ([]string, error) {
 		if err := os.WriteFile(p, []byte(f.Text), 0o644); err != nil {
 			return nil, err
 		}
-		files = append(files, p)
+		if v.DUT == nil || f.Path == v.DUT.File {
+			files = append(files, p)
+		}
 	}
 	return files, nil
 }
 
-// synthNetlist synthesizes the design top alone (no board top: CC_USR_RSTN and CC_PLL have no simulation
-// model) and keeps I/O and clock buffers out so the netlist has the RTL's ports.
+// synthNetlist synthesizes the device under test alone: the design top, or the domain module of a design cut
+// at its cells (no board top: CC_USR_RSTN and CC_PLL have no simulation model). I/O and clock buffers stay
+// out so the netlist has the RTL's ports.
 func synthNetlist(ctx context.Context, suite *toolchain.Suite, dir string, v *Vectors) (string, error) {
 	ndir := filepath.Join(dir, "net")
 	if err := os.MkdirAll(ndir, 0o755); err != nil {
@@ -135,9 +138,12 @@ func synthNetlist(ctx context.Context, suite *toolchain.Suite, dir string, v *Ve
 	}
 	var script strings.Builder
 	for _, f := range v.Bundle.Files {
-		fmt.Fprintf(&script, "read_verilog -defer ../rtl/%s\n", f.Path)
+		if v.DUT == nil || f.Path == v.DUT.File {
+			fmt.Fprintf(&script, "read_verilog -defer ../rtl/%s\n", f.Path)
+		}
 	}
-	fmt.Fprintf(&script, "synth_gatemate -top %s -noiopad -noclkbuf -luttree -nomx8\nstat\nwrite_verilog -noattr netlist.v\n", v.Bundle.Top)
+	module, _, _ := v.ports()
+	fmt.Fprintf(&script, "synth_gatemate -top %s -noiopad -noclkbuf -luttree -nomx8\nstat\nwrite_verilog -noattr netlist.v\n", module)
 	if err := os.WriteFile(filepath.Join(ndir, "synth.ys"), []byte(script.String()), 0o644); err != nil {
 		return "", err
 	}
@@ -152,7 +158,7 @@ func writeTestbench(sdir string, v *Vectors, s *ScenarioVectors) (string, error)
 	if err := os.MkdirAll(sdir, 0o755); err != nil {
 		return "", err
 	}
-	tb, err := Generate(v.Bundle, s)
+	tb, err := Generate(v, s)
 	if err != nil {
 		return "", err
 	}

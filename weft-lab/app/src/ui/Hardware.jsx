@@ -170,7 +170,7 @@ function Validation({ j }) {
         ))}</tbody>
       </table>
       {has("validate/net/netlist.v") ? <p className="hwfiles"><a className="link" href={hw.fileURL("validate/net/netlist.v", j.id)} target="_blank" rel="noreferrer">netlist.v</a><a className="link" href={hw.fileURL("validate/net/synth.log", j.id)} target="_blank" rel="noreferrer">synth.log</a></p> : null}
-      <p className="note dim">rtl and net run a variant of the design whose main clock is 1 MHz, so every scenario replays whole; a scenario that pokes internal signals is skipped.</p>
+      <p className="note dim">rtl and net run a variant of the design whose main clock is 1 MHz, so every scenario replays whole; a scenario that pokes internal signals is skipped. A design with native cells (UART, debounce) is checked up to its cells; their cores have their own testbenches.</p>
     </section>
   );
 }

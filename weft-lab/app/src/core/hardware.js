@@ -3,13 +3,13 @@
 // wrap it for a board — clocks, reset, which top-level port bit carries which board resource, native
 // cells, knobs, the estimate and which scenarios can run on hardware. Go never runs JavaScript and never
 // parses Verilog; it reads this. DOM-free: the page and tools/weft-hw.mjs both call buildBundle.
-import { emitVerilog, pinParts, sanitize } from "./verilog.js";
+import { emitVerilog, pinParts, sanitize, CELL_CORES, cellStubs } from "./verilog.js";
 
 export const HW_BUNDLE_SCHEMA = "weft.hw-bundle/v1";
 
-// Native cells with a hand-written core in hdl/cells (kind → core module). The adapters that connect a
-// cell's stream-derived ports to its core come with the cores (P7); until then designs with cells are refused.
-export const CELL_CORES = {};
+// Native cells with a hand-written core in hdl/cells (verilog.js CELL_CORES: kind → core and adapter). The
+// emitted Verilog wires each such cell to its core through a generated adapter; weft build adds the core.
+export { CELL_CORES };
 
 // Scenario steps the board runner (hwscenario.js) can perform through the HIL bridge or the design's UART.
 export const PORTABLE_STEPS = new Set(["wait", "press", "release", "toggle", "set", "uart", "expectToggles", "expectPins", "expectUart"]);
@@ -44,6 +44,11 @@ export function buildBundle(compiled, { source = null } = {}) {
   if (unsupported.length) {
     throw new HwError("cells", `native cells without a hardware core yet: ${unsupported.map((c) => `${c.path} (${c.kind})`).join(", ")}`, unsupported.map((c) => ({ path: c.path, kind: c.kind })));
   }
+  const stubs = cellStubs(compiled);
+  const unfit = (compiled.cells || []).filter((c) => stubs.byCell.get(c)?.reason);
+  if (unfit.length) {
+    throw new HwError("cells", `native cells whose interface does not fit their core: ${unfit.map((c) => `${c.path} (${stubs.byCell.get(c).reason})`).join(", ")}`, unfit.map((c) => ({ path: c.path, kind: c.kind, message: stubs.byCell.get(c).reason })));
+  }
 
   const files = emitVerilog(compiled);
   const failed = files.find((f) => f.path === "ERROR.txt");
@@ -63,7 +68,7 @@ export function buildBundle(compiled, { source = null } = {}) {
     clocks: clocksOf(compiled),
     reset: { port: "rst", activeHigh: true, synchronous: true },
     ports: portsOf(pins, board),
-    cells: (compiled.cells || []).map((c) => ({ path: c.path, kind: c.kind, domain: c.domain, module: CELL_CORES[c.kind], params: c.params || {} })),
+    cells: (compiled.cells || []).map((c) => ({ path: c.path, kind: c.kind, domain: c.domain, module: CELL_CORES[c.kind].core, params: c.params || {} })),
     knobs: (compiled.knobs || []).map((k) => ({ path: k.path, kind: k.kind, type: k.typeName, width: k.type?.w ?? null, reset: k.reset ?? 0, min: k.min ?? null, max: k.max ?? null, addr: k.addr ?? null, domain: k.domain })),
     estimate: estimateOf(compiled.report),
     scenarios: (compiled.scenarios || []).map(scenarioSummary),

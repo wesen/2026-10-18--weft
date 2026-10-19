@@ -76,5 +76,38 @@ test("a design with several clock domains is skipped as a whole", async () => {
 });
 
 test("a design that cannot go to the board is refused, not recorded", async () => {
-  await assert.rejects(vec("F-05"), (e) => e instanceof HwError);
+  await assert.rejects(vec("F-10"), (e) => e instanceof HwError && e.code === "compile");
+});
+
+// designs with cells are cut at the cell boundary: the domain module is the device under test
+test("F-05 is cut at its debounce cell: presses come in as inputs, the raw buttons go out", async () => {
+  const v = await vec("F-05");
+  assert.equal(v.dut.module, "lights_sys");
+  assert.equal(v.dut.file, "lights_sys.v");
+  const at = (name) => v.dut.ports.findIndex((p) => p.name === name);
+  const port = (name) => v.dut.ports[at(name)];
+  assert.deepEqual(port("presses_valid"), { name: "presses_valid", dir: "in", width: 1 });
+  assert.deepEqual(port("x_54"), { name: "x_54", dir: "out", width: 4, check: true });   // raw, read by the cell
+  const [s] = v.scenarios;
+  assert.equal(s.sim.status, "pass");
+  const ch = (name) => s.changes.filter((c) => c[1] === at(name));
+  // btn:2 pressed at cycle 1; the cell's held output follows 10 ms (10,000 cycles at 1 MHz) later
+  assert.deepEqual(ch("pin_btn_0_btn_1_btn_2_btn_3")[0], [1, at("pin_btn_0_btn_1_btn_2_btn_3"), "4"]);
+  assert.deepEqual(ch("buttons_held")[0], [10002, at("buttons_held"), "4"]);
+  // the release yields { id: 2, long: 0 } = 0b100, and the LEDs follow
+  const ev = ch("presses_valid")[0][0];
+  assert.deepEqual(ch("presses_data")[0], [ev, at("presses_data"), "4"]);
+  assert.ok(ch("o_pin_led_0_led_1_led_2_led_3_led_4_led_5_led_6_led_7").some(([c, , x]) => c > ev && x === "4"));
+});
+
+test("F-16 is cut at its uart cells: rx bytes in, tx bytes out, the uart.tx pin not at all", async () => {
+  const v = await vec("F-16");
+  assert.equal(v.dut.module, "shout_sys");
+  assert.ok(!v.dut.ports.some((p) => /uart_tx/.test(p.name)), "a cell-owned pin is not a domain-module port");
+  const at = (name) => v.dut.ports.findIndex((p) => p.name === name);
+  const [s] = v.scenarios;
+  const first = (name, hex) => s.changes.find((c) => c[1] === at(name) && c[2] === hex)?.[0];
+  const rx = first("rx_bytes_data", "68"), tx = first("x_7", "48");   // "h" in, "H" out
+  assert.ok(rx > 0 && tx > rx && tx - rx <= 4, `h at ${rx}, H at ${tx}`);
+  assert.deepEqual(s.changes.find((c) => c[1] === at("tx_bytes_out_ready")), [1, at("tx_bytes_out_ready"), "1"], "the tx cell is ready from the start");
 });

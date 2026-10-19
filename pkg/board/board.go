@@ -6,11 +6,13 @@ package board
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
+	"github.com/wesen/2026-10-18--weft/hdl"
 	"github.com/wesen/2026-10-18--weft/pkg/bundle"
 )
 
@@ -63,6 +65,7 @@ type PLL struct {
 type Wrapped struct {
 	TopModule string
 	Files     []bundle.File // the board top
+	Cores     []bundle.File // the native cells' cores (hdl/cells) the design's adapters instantiate
 	CCF, SDC  string
 	PLLs      []PLL
 	Virtual   []string // bound resources with no pin
@@ -133,6 +136,16 @@ func (b *Board) Wrap(bn *bundle.Bundle, opt WrapOptions) (*Wrapped, error) {
 		}
 		w.PLLs = append(w.PLLs, PLL{Domain: c.Domain, WantMHz: strconv.FormatFloat(c.WantHz/1e6, 'f', -1, 64), Hz: c.Hz})
 		clockNet[c.Domain] = c.Port // a wrapper wire named like the design port it feeds
+	}
+
+	for _, c := range bn.Cells {
+		src, ok := hdl.Core(c.Module)
+		if !ok {
+			return nil, errors.Errorf("native cell %s (%s): this weft has no core %q (it has %s)", c.Path, c.Kind, c.Module, strings.Join(hdl.Modules(), ", "))
+		}
+		if !slices.ContainsFunc(w.Cores, func(f bundle.File) bool { return f.Path == c.Module+".v" }) {
+			w.Cores = append(w.Cores, bundle.File{Path: c.Module + ".v", Text: src})
+		}
 	}
 
 	// resolve every bound bit against the board, refusing drift between the JS profile and this data

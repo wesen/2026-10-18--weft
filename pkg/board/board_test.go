@@ -115,6 +115,9 @@ func TestWrapRefusals(t *testing.T) {
 		"cascaded pll": func(b *bundle.Bundle) {
 			b.Clocks = append(b.Clocks, bundle.Clock{Domain: "x", Port: "clk_x", Hz: 1e6, Kind: "pll", WantHz: 1e6, From: "y"})
 		},
+		"unknown core": func(b *bundle.Bundle) {
+			b.Cells = append(b.Cells, bundle.Cell{Path: "dac", Kind: "sigma-delta", Module: "weft_core_sigma_delta"})
+		},
 	}
 	for name, mutate := range cases {
 		bn := loadBundle(t, "F-01-blinky")
@@ -122,6 +125,30 @@ func TestWrapRefusals(t *testing.T) {
 		if _, err := GateMateA1EVB.Wrap(bn, WrapOptions{}); err == nil {
 			t.Errorf("%s: expected a refusal", name)
 		}
+	}
+}
+
+// The cores a bundle's cells name come with the wrapper, once each.
+func TestWrapCores(t *testing.T) {
+	bn := loadBundle(t, "F-01-blinky")
+	bn.Cells = []bundle.Cell{
+		{Path: "rx", Kind: "uart-rx", Module: "weft_core_uart_rx"},
+		{Path: "tx", Kind: "uart-tx", Module: "weft_core_uart_tx"},
+		{Path: "tx2", Kind: "uart-tx", Module: "weft_core_uart_tx"},
+	}
+	w, err := GateMateA1EVB.Wrap(bn, WrapOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range w.Cores {
+		got = append(got, f.Path)
+		if !strings.Contains(f.Text, "module "+strings.TrimSuffix(f.Path, ".v")+" ") {
+			t.Errorf("%s does not declare its module", f.Path)
+		}
+	}
+	if strings.Join(got, ",") != "weft_core_uart_rx.v,weft_core_uart_tx.v" {
+		t.Errorf("cores %v", got)
 	}
 }
 

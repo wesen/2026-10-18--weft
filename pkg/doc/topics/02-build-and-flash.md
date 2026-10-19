@@ -65,5 +65,17 @@ has), bind at least one resource, and use only native cells that have a hardware
 `weft emit` refuses with the reason: `bare-part`, `no-pins`, `cells`, or the compile error, for example
 "the gatemate-a1-evb board has no hdmi".
 
+Three native cells have hand-written cores (`hdl/cells/`, built into `weft`): `std.debounce`
+(`weft_core_debounce`), `std.uart.rx` and `std.uart.tx` (`weft_core_uart_rx`, `weft_core_uart_tx`, 8N1).
+The emitted Verilog wires each such cell to its core through a generated adapter, and `weft build` adds the
+core to synthesis (`cells/` in the build directory). Where hardware and the Lab's models differ (the receiver
+holds one byte, the transmitter runs up to 1 % fast so a design that forwards bytes never falls behind, the
+debouncer keeps one pending event per input), the core's header says so.
+
+The A1-EVB's FPGA UART (`uart.tx`, `uart.rx`) reaches the host as the RP2040's first serial port,
+`/dev/ttyACM0` at 115200 baud (it needs the `cdc_acm` module). The RP2040 forwards USB data without flow
+control and drops what overflows its buffer, so a host should not send bursts much longer than 1 KB ahead
+of what comes back.
+
 On the A1-EVB, `led:0` and `btn:user` (alias `btn:0`) are the board's LED and button, `led:1..7` are PMOD
 pins, and `btn:1..3` and `sw:0..7` are virtual: they compile, and on the board they read as 0.

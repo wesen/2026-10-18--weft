@@ -239,7 +239,7 @@ func (s *Suite) step(ctx context.Context, dir, stage string, ev Events, tool str
 }
 
 func writeSources(req BuildRequest) error {
-	for _, d := range []string{"rtl", "board"} {
+	for _, d := range []string{"rtl", "board", "cells"} {
 		if err := os.MkdirAll(filepath.Join(req.Dir, d), 0o755); err != nil {
 			return err
 		}
@@ -256,6 +256,12 @@ func writeSources(req BuildRequest) error {
 			return err
 		}
 		reads = append(reads, "board/"+f.Path)
+	}
+	for _, f := range req.Wrapped.Cores {
+		if err := os.WriteFile(filepath.Join(req.Dir, "cells", f.Path), []byte(f.Text), 0o644); err != nil {
+			return err
+		}
+		reads = append(reads, "cells/"+f.Path)
 	}
 	files := map[string]string{"board/board.ccf": req.Wrapped.CCF, "board/board.sdc": req.Wrapped.SDC,
 		"synth.ys": fmt.Sprintf("read_verilog -defer %s\nsynth_gatemate -top %s -luttree -nomx8\nstat\nwrite_json top.json\n",

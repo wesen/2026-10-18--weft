@@ -4,6 +4,7 @@
 //
 //   vectors(script, { file, board, cosimHz, scenario }) → {
 //     schema, cosimHz, bundle,                 // the hardware bundle of the co-simulation variant
+//     dut?,                                    // designs with native cells: the domain module under test
 //     scenarios: [{ name, cycles, changes: [[cycle, port, hex]], sim: { status, message } } | { name, skip }],
 //     skip?                                    // the whole design cannot be co-simulated, and why
 //   }
@@ -15,9 +16,16 @@
 //     during edge k from the registers of cycle k-1 and the inputs of edge k).
 // Pins are recorded through the simulator's board hooks (setInput, _pin), not its waves: waves record a
 // change when it is noticed, which can be the time of an input change rather than the edge that sees it.
+//
+// A design with native cells is cut at the cell boundary (guide §6.10): the cells' JavaScript models work at
+// the transaction level, so their cores are checked by their own testbenches (hdl/cells/tb) instead. The
+// device under test is then the domain module, and `dut.ports` replaces the bundle's ports: pin inputs, the
+// values cells drive into the graph (inputs), the graph's outputs, and the values cells read (outputs x_<id>).
+// A cell ticks inside edge k after the graph is evaluated, so what it reads belongs to cycle k and what it
+// drives is first seen by edge k + 1.
 import { compile } from "./compile.js";
 import { buildBundle, HwError } from "./hardware.js";
-import { pinParts } from "./verilog.js";
+import { pinParts, emitVerilog } from "./verilog.js";
 import { runScenario } from "./scenario.js";
 
 export const VECTORS_SCHEMA = "weft.vectors/v1";
@@ -38,7 +46,15 @@ export async function vectors(script, { file = "design.js", board = "gatemate-a1
   }
   const list = (compiled.scenarios || []).filter((s) => !scenario || s.name === scenario);
   if (scenario && !list.length) throw new HwError("scenario", `no scenario named "${scenario}" (there are: ${(compiled.scenarios || []).map((s) => s.name).join(", ") || "none"})`);
-  for (const sc of list) out.scenarios.push(await record(compiled, bundle, sc));
+  let cut = null;
+  if ((compiled.cells || []).length) {
+    const dm = emitVerilog(compiled).find((f) => f.domain === compiled.main);
+    if (!dm) throw new HwError("emit", `no module for the main domain ${compiled.main}`);
+    const watched = new Set((compiled.pins || []).filter((p) => p.node != null).map((p) => p.node));
+    cut = dm.ports.map((p) => ({ name: p.name, dir: p.dir === "input" ? "in" : "out", width: p.w, node: p.id, check: p.dir === "input" ? false : p.export || watched.has(p.id) }));
+    out.dut = { module: dm.module, file: dm.path, ports: cut.map(({ name, dir, width, check }) => ({ name, dir, width, ...(dir === "out" ? { check } : {}) })) };
+  }
+  for (const sc of list) out.scenarios.push(await (cut ? recordCut(compiled, cut, sc) : record(compiled, bundle, sc)));
   return out;
 }
 
@@ -82,6 +98,57 @@ async function record(compiled, bundle, sc) {
   return {
     name: sc.name, cycles: sim.cycle(sim.main.name),
     changes: changes.map(([c, i, v]) => [c, i, v.toString(16)]),
+    sim: { status: r.status, message: r.message },
+  };
+}
+
+// the same recording for a design cut at its cells: every change of a domain-module port, as node values
+async function recordCut(compiled, cut, sc) {
+  const internal = (sc.steps || []).find((s) => INTERNAL.has(s.op));
+  if (internal) return { name: sc.name, skip: `step ${internal.op}(${JSON.stringify(internal.args?.[0] ?? "")}) changes the design's internals, which the RTL's ports cannot reproduce` };
+  const ports = cut.map((p, i) => ({ ...p, i, value: 0n }));
+  const byNode = new Map(ports.map((p) => [p.node, p]));
+  const inputs = ports.filter((p) => p.dir === "in");
+  const reads = new Set((compiled.cells || []).flatMap((c) => Object.values(c.io || {}).filter((e) => e.dir === "read").map((e) => e.node)));
+  const changes = [];
+  const put = (cycle, p, v) => {
+    const x = BigInt.asUintN(p.width, typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v) || 0)));
+    if (x === p.value) return;
+    p.value = x;
+    const last = changes.at(-1);
+    if (last && last[0] === cycle && last[1] === p.i) last[2] = x;
+    else changes.push([cycle, p.i, x]);
+  };
+  const val = (D, id) => (D.big[id] ? D.B[id] : D.F[id]);
+  let sim = null, taint = null;
+  const r = await runScenario(compiled, sc.name, {
+    onSim(s) {
+      sim = s;
+      const board = s.board, D = s.main;
+      const snap = (cycle) => { for (const p of inputs) put(cycle, p, val(D, p.node)); };
+      snap(1);                                   // initial drives (a uart-tx cell is ready from the start)
+      const setInput = board.setInput.bind(board);
+      board.setInput = (res, level) => { setInput(res, level); snap(D.cycle + 1); };
+      const pin = board._pin.bind(board);
+      board._pin = (PD, k, v) => { pin(PD, k, v); const p = PD === D && byNode.get(PD.pinWatch[k].node); if (p && p.dir === "out") put(PD.cycle + 1, p, v); };
+      const tick = s._tick.bind(s);
+      s._tick = (TD) => {
+        if (TD === D) for (const id of reads) { const p = byNode.get(id); if (p && p.dir === "out") put(D.cycle + 1, p, val(D, id)); }
+        tick(TD);
+        if (TD === D) snap(D.cycle + 2);
+      };
+      for (const m of ["poke", "release", "reload"]) {
+        const f = s[m].bind(s);
+        s[m] = (...a) => { taint ||= `${m}(${JSON.stringify(a[0])})`; return f(...a); };
+      }
+    },
+  });
+  if (!sim) return { name: sc.name, skip: r.message || "the scenario did not start a simulation" };
+  if (taint) return { name: sc.name, skip: `the scenario called ${taint}, which changes the design's internals` };
+  const cycles = sim.cycle(sim.main.name);
+  return {
+    name: sc.name, cycles,
+    changes: changes.filter(([c]) => c <= cycles).map(([c, i, v]) => [c, i, v.toString(16)]),
     sim: { status: r.status, message: r.message },
   };
 }
