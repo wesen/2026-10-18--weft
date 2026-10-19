@@ -15,6 +15,10 @@ Owners: []
 RelatedFiles:
     - Path: repo://hdl/hdl.go
       Note: embedded cell cores
+    - Path: repo://hdl/hil/weft_hil.v
+      Note: P8 bridge (Step 10)
+    - Path: repo://pkg/hil/hil.go
+      Note: P8 host side of the HIL protocol (Step 10)
     - Path: repo://pkg/hw/validate.go
       Note: validation inside hardware jobs
     - Path: repo://pkg/validate/testbench.go
@@ -997,3 +1001,190 @@ native OSS CAD Suite binaries, run by the Go server; only the Weft compiler is J
   `weft_core_debounce #(.N(4), .ID_W(2), ...)` with `.ev_id(presses_data[2:1]), .ev_long(presses_data[0])`.
 - F-16's cut DUT `shout_sys` ports: inputs `tx_bytes_out_ready`, `rx_bytes_valid`, `rx_bytes_data`,
   `pin_uart_rx`; checked outputs `x_4` (tx valid), `x_7` (tx data), `x_10` (rx ready), `x_73` (the rx pin).
+
+## Step 10: P8 — board-level validation through the HIL bridge and board sessions
+
+P8 adds the top rung of the validation ladder: a design's portable scenarios run on the real A1-EVB. The
+board has one LED and one button, so a build made with `--hil` carries a bridge on the board's UART
+(`hdl/hil/weft_hil.v`). The bridge reports every output change with the cycle it happened in, and takes
+commands that set inputs, reset the design and ask for the time. On the host, `pkg/hil` speaks that
+protocol. `pkg/hw` holds the board in a *session* (modes `hil`, `uart`, `none`) under
+`/api/hw/board/session`, and `hwscenario.js` runs scenario steps against a session in board cycles. The Lab
+gets an **On the board** panel, and `weft validate` a `board` level.
+
+Both exit checks pass on the board. `weft validate F-01 --levels build,board` passes "blinks at 2 Hz" in
+11,000,000 board cycles with exactly 4 toggles of `led:0`. A script that drives `btn:user`
+(`scripts/09-btn-user.js`) passes on the board as it does in RTL and netlist co-simulation. F-05 (virtual
+buttons) and F-02 also pass through the bridge. F-06 and F-16 pass in `uart` mode, where the design owns the
+UART.
+
+### Prompt Context
+
+**User prompt (verbatim):** see Step 1. No new user messages during this phase.
+**Assistant interpretation:** Phase P8 of the guide (§6.10–§6.12, §9 step 8), task 7ax1.
+**Inferred user intent:** Validation ends on the board the user owns, not in a simulator: the same scenarios,
+with real timing, from the CLI, the Lab and the agent.
+**Commit (code):** 134b04c — "P8: board-level validation through the HIL bridge and board sessions"
+
+### What I did
+- **Bridge** (`hdl/hil/weft_hil.v`, `#(CLK_HZ, BAUD, NOUT, NIN, AW=9)`; reuses the P7 UART cores):
+  - Lines to the host, all hex: `O ss c… oo…` (change), `H ss c…` (heartbeat every 2^20 cycles), `A ss c…`
+    (command applied), `E ss c…` (malformed command), `X ss llll` (changes lost).
+  - Commands from the host: `I <vins> <ovr>`, `W <mask>`, `R` (A at cycle 0, then a forced O; dut_rst for
+    5 cycles; inputs and overrides cleared), `T`.
+  - Every line goes through one cycle-ordered queue (512 × {kind, 56-bit cycle or lost count, outs}, one
+    `CC_BRAM_40K`). At most one push per cycle, with priority X > O > A/E > H. A change that finds the queue
+    full is counted, and an O after the X resyncs the host.
+  - Testbench `hdl/hil/tb/weft_hil_tb.v` (1 Mbaud, NOUT=3, NIN=2, AW=3) checks T, R, cycle stamps, I/W, E,
+    overflow (reported + lost = 30) and the heartbeat at 0x100000. It runs from `go test ./hdl`.
+- **Wrapping** (`pkg/board/hil.go`, `Wrap` with `HIL: true`):
+  - Bridge inputs are every bound input resource in bundle order. A physical input goes through
+    `ovr ? vins : pin` before its synchronizer; a virtual input takes `vins` directly.
+  - Outputs are tapped from the design's port bits, with other domains synced into the main one.
+  - The design's reset is `rst_cfg | hil_rst`.
+  - The UART pins join the CCF, and a design that binds `uart.*` is refused.
+  - The build report carries the `HILMap`. A golden test (`F-05-buttons-hil.{top.v,ccf,sdc}`) covers all of
+    this.
+- **Host side** (`pkg/hil`):
+  - `ParseLine` and `Conn`: a reader that ignores everything until R's A at cycle 0, then tracks sequence
+    gaps, the output history, `X` losses and heartbeats.
+  - One outstanding command with a 2 s ack timeout. `Set` takes `map[string]*int`, where nil gives a
+    physical input back.
+  - `Snapshot`, `Changes(epoch, cursor)`, and `WaitCycle`, which sleeps by the clock rate and then sends T.
+  - `hiltest` is a software bridge over pipes, with a model function and a drop hook.
+- **Sessions** (`pkg/hw/session.go`, `session_http.go`, `serial.go`):
+  - `OpenSession` picks the mode from the report, takes `boardMu` for the session's lifetime (TryLock, so a
+    running load answers `board_busy`), loads through `loadLocked`, opens the serial port raw (termios,
+    drained for 300 ms), and resets the bridge.
+  - Routes: POST/GET/DELETE session, SSE `events`, `reset`, `inputs`, `wait`, and `uart` send/read.
+  - Loads answer 409 `board_session` while a session is open.
+  - `writePaced` keeps at most 1 KB in flight to the RP2040.
+- **Scenarios on the board** (`weft-lab/app/src/core/hwscenario.js`):
+  - `hilRunner`: `wait` in cycles. `press`/`release`/`toggle`/`set` take effect at the acked cycle.
+    `expectPins`/`expectToggles` read the history by binary search, and `within` checks every change up to
+    the deadline. Any lost change or gap fails the scenario.
+  - `uartRunner`: `wait`/`uart`/`expectUart` on the host clock, plus 25 ms of USB slack.
+  - Steps that reach into the design skip the scenario, as in co-simulation.
+  - `runScenariosOnBoard` reuses an open session on the same build.
+  - `test/hwscenario.test.mjs` tests it against a fake board built on the Lab's own `Sim`, with a
+    20,000-cycle input latency.
+- **CLI**: `weft build --hil`, and `weft validate --levels board` (`validate_board.go`). The latter uses
+  serve's API when serve answers on `--listen`, else an in-process Manager on an ephemeral port.
+  `emitter.RunOnBoard` drives `weft-hw.mjs board` through Node. With `board`, the build row reports the HIL
+  build.
+- **Lab**:
+  - The Hardware tab gets a HIL box and **On the board**: Open/Close session, Reset design, LED cells,
+    input buttons with ↩ give-back, a UART pane, *Run scenarios on board* and a results table.
+  - `hw.js` keeps the session's cycle and counters current from the event stream.
+  - The agent's `hw` gains `session`, `openSession`, `closeSession`, `resetBoard`, `setInputs`, `sendUart`
+    and `runOnBoard`. Read-only mode refuses the ones that change the board.
+- **Docs**: a new help topic `board-session`. The `validation-ladder` topic gets a board level section, and
+  `build-and-flash` documents `--hil`.
+- **Scripts**: `08-hil-probe.py` talks to the bridge directly; `09-btn-user.js` is the exit-check design.
+
+### Why
+- **One queue in cycle order, not a free-running stream.** A line stamped with cycle c then proves that every
+  change up to c has arrived. A wait therefore costs one `T`/`A` round trip, and an expectation at cycle c
+  reads a complete history: no polling and no guessing about USB latency.
+- **Losses are reported, not hidden.** At 115200 baud an O line takes about 2 ms, so a fast design can
+  outrun the link. The bridge counts what it drops and the runner fails the scenario, because a toggle count
+  built on a partial history would be wrong.
+- **Muxed physical inputs.** `btn:user` keeps working by hand during a session, and the host takes it over
+  only while it sets it. Virtual inputs (which read 0 without the bridge) finally get values on the board.
+- **The session holds the board lock for its lifetime.** Without that, a load from the Lab or another
+  `weft validate` could replace the bitstream under a running scenario. Going through serve when it answers
+  keeps the CLI and the Lab on one lock.
+- **The runner lives in JavaScript.** The scenario language, `expandResources` and the step labels already
+  live in the Lab, so the CLI runs the same code through Node that the page runs in the browser.
+
+### What worked
+- `WEFT-TB PASS weft_hil`. Synthesis with NOUT=8, NIN=5 gives 1 `CC_BRAM_40K` and about 430–439 flip-flops.
+- F-01 HIL build: CPE_LT 1230, CPE_FF 402, RAM_HALF 2, 58.75 MHz (PASS at 10 MHz).
+- Probe on the board: `led:0` toggles at cycles 2,499,996 / 4,999,996 / 7,499,996 / 9,999,996.
+- Session through serve: opens in 0.47 s. 25 changes in about 6 s arrive with no gaps or losses. A wait for
+  cycle 11,000,001 returned at 11,029,409, 2.9 ms past the target, with 4 toggles.
+- **Exit check 1:** `./bin/weft validate weft-lab/examples/F-01-blinky.js --levels build,board`: board
+  "blinks at 2 Hz" passes, 11,000,000 cycles, "led:0 toggles = 4".
+- **Exit check 2:** `09-btn-user.js` press/release/press for 100 ms: board pass with 4 toggles in 1,408,939
+  cycles; rtl and net pass (103,000 cycles).
+- F-05 board pass, 8,152,146 cycles (from the page: 8,114,752). F-02 board pass, 6,607,564 cycles, with its
+  poke scenario skipped. F-06 and F-16 pass in `uart` mode (hellos 1001 ms apart; echo after 7 ms).
+- In the page: a 100 ms press of `btn:2` through `/inputs` (acked at 251,857,115, released at 252,911,909)
+  lit `led:2` in the LED cells.
+- `go test ./... -count=1` (all packages, `pkg/validate` 107 s), `-race` on `pkg/hil` and `pkg/hw`,
+  `make js-test` (32 files, 0 failures), `make lint`, `gofmt -l` and `git diff --check` pass.
+
+### What didn't work
+- **Overflow never reported.** The testbench failed with "overflow: no X line". `(wp - rp) == (1 << AW)` is
+  evaluated at 32 bits, where a full queue's difference wraps to 0 in the (AW+1)-bit pointers but not in
+  the comparison. The fix is a sized `wire [AW:0] used = wp - rp; full = used[AW]`.
+- The testbench then waited for 12 lines where the bridge sends 11 (9 O + X + O): my count, not the RTL.
+- **R ordering.** A pending forced O could leave before R's A, so the host saw an O stamped from the previous
+  run after it asked for a reset. Now an `r_o` flag forces the O only once the A is in the queue, and R
+  clears a pending error.
+- `Set` built its `I` line inside a setup callback while `command` sent its own string argument, so the
+  wrong line went out. `command` now takes `build func() string`.
+- **`w.changes is not iterable`** on the first F-05 board run. `Changes` returned a nil slice, which Go
+  encodes as `null`. It now returns `[]Change{}`, and the runner also guards with `|| []`.
+- **`release("btn:user")` skipped as internal** in RTL co-simulation of `09-btn-user.js`. `isInternal` in
+  `vectors.js` treated every `release` as a step on the design's internals. A release whose arguments all
+  expand to board resources now counts as a port step.
+- The JS fake board: `board.read()` inside the `_pin` hook still returns the value from before the edge, so
+  the first fake recorded no changes. The level has to come from the hook's arguments
+  (`D.pinWatch[k].res` + bit). The hook also fired before the history existed.
+- The page logged a 404 on every load: `GET /session` answered `no_session` when nothing was open. It now
+  answers 200 `null`.
+- `weft-hw.mjs: unknown flag --url`: `make build` does not regenerate the embedded tool; `make web` (or
+  `go generate ./pkg/emitter`) must run first.
+- In the page, two clicks of `btn:2` about 1 s apart cleared the LEDs instead of lighting one. That is F-05
+  working: a press of 500 ms or more is a long press, which clears.
+
+### What I learned
+- The cycle-ordered queue makes "wait for cycle c" exact and cheap, which removes the hardest part of
+  board-level testing (host timing) from the runner's concerns.
+- The USB latency (1–2 ms per input) shows up only as a shift of the input cycle. A scenario that measures
+  from the input's acknowledged cycle is unaffected, which is why 100 ms presses and 1.1 s waits match the
+  simulator exactly.
+- Go's nil slice to JSON `null` crossed a language boundary unnoticed until the real board produced an empty
+  change list. The fake bridge never did.
+
+### What was tricky to build
+- The bridge's reset sequence: R must produce A at cycle 0, then an O with the post-reset outputs, while the
+  design is held in reset and the queue may still hold lines from before. The host side drops everything
+  until that A and bumps the epoch, so cursors from before a reset are void.
+- Waiting with a cursor: `Wait(target, epoch, cursor)` answers the changes after the cursor up to the cycle
+  the board has reached, and the runner keeps a binary-searchable history across waits, so `within` can look
+  ahead without another round trip when the history already covers it.
+
+### What warrants a second pair of eyes
+- `ovr` for a physical input selects the host's value, and the HIL input takes effect two synchronizer stages
+  later, just like the pin. The runner treats the acked cycle as the input's cycle. Expectations at exactly
+  the input cycle (no `within`) could be off by those two cycles.
+- `boardAPI` decides between serve and in-process with a 1 s GET of `/api/hw/status`. A slow or hung serve
+  makes the CLI start its own Manager, which then fails to open the serial port that serve holds.
+- `writePaced` is tuned for the RP2040's buffer (1 KB in flight) and is untested with other bridges.
+- The page's session counters are kept from events between refreshes. `changes` counts `pins` events, which
+  matches the server's cursor only while no event is dropped by a slow SSE subscriber.
+
+### What should be done in the future
+- A board-level `uart` step with the bridge present would need a second serial channel (the A1-EVB has only
+  one FPGA UART), or the bridge could tunnel the design's UART. Out of scope for now: such scenarios skip.
+- Faster reporting (921600 baud, or only the changed bits) if designs that toggle outputs every few hundred
+  microseconds should run on the board.
+
+### Code review instructions
+- Start with `hdl/hil/weft_hil.v` (queue and formatter) and its testbench, then `pkg/board/hil.go`
+  (`planHIL`, generated top lines), `pkg/hil/hil.go` (`line`, `command`, `Reset`, `Set`), `pkg/hw/session.go`
+  (`OpenSession` locking), and `weft-lab/app/src/core/hwscenario.js` (`hilRunner`).
+- `GOWORK=off go test ./hdl ./pkg/board ./pkg/hil/... ./pkg/hw -race -count=1`;
+  `node --test weft-lab/app/test/hwscenario.test.mjs`.
+- With the board: `./bin/weft validate weft-lab/examples/F-01-blinky.js --levels build,board`; `weft help
+  board-session`.
+
+### Technical details
+- Bridge instance in the F-05 top: `weft_hil #(.CLK_HZ(10000000), .BAUD(115200), .NOUT(8), .NIN(5)) u_hil`,
+  inputs `sw:0, btn:0 (physical), btn:1, btn:2, btn:3`, outputs `led:0..7`.
+- Queue entry: `{kind[2:0], cycle[55:0] | {lost[15:0], 40'b0}, outs[NOUT-1:0]}`; formatter line length
+  `20 + NH` characters for O (NH = hex digits of the outputs), 19 for A/E/H, 9 for X.
+- Session view: `{session, build, design, mode, hil: {baud, hz, tx, rx, inputs, outputs}, openedAt, state:
+  {epoch, cycle, outs, inputs, overrides, changes, lost, gaps}}`.

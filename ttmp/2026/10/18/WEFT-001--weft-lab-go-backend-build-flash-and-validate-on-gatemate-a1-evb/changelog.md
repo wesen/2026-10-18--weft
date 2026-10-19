@@ -52,3 +52,14 @@ P7 (c6e0dc0): hardware cores for debounce, uart-rx and uart-tx in hdl/cells with
 
 - /home/manuel/code/wesen/2026-10-18--weft/hdl/cells/weft_core_uart_tx.v — uart-tx core (divider rounded down)
 - /home/manuel/code/wesen/2026-10-18--weft/weft-lab/app/src/core/verilog.js — CELL_CORES and the generated adapters
+
+## 2026-10-18
+
+P8 (134b04c): board-level validation. weft build --hil adds the weft_hil bridge (cycle-stamped output changes, host-set inputs, over the board UART); board sessions under /api/hw/board/session hold the board; hwscenario.js runs portable scenarios in board cycles; weft validate --levels board, the Lab's On the board panel and the agent's hw session methods. F-01 'blinks at 2 Hz' and a btn:user scenario pass on the A1-EVB.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-10-18--weft/hdl/hil/weft_hil.v — The HIL bridge
+- /home/manuel/code/wesen/2026-10-18--weft/pkg/doc/topics/04-board-session.md — Help topic board-session
+- /home/manuel/code/wesen/2026-10-18--weft/pkg/hw/session.go — Board sessions
+- /home/manuel/code/wesen/2026-10-18--weft/weft-lab/app/src/core/hwscenario.js — Scenarios on the board
