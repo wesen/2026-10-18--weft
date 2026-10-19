@@ -1,7 +1,7 @@
 ---
 Title: 'Weft Lab Go backend: build, flash and validate on GateMate A1-EVB'
 Ticket: WEFT-001
-Status: active
+Status: complete
 Topics:
     - weft
     - fpga
@@ -18,7 +18,7 @@ ExternalSources:
     - 'local:Book 1: Weft, From First Principles (Claude Docs export).md'
     - 'local:Book 2: Building Weft: Implementation and Reference (Claude Docs export).md'
 Summary: ""
-LastUpdated: 2026-10-18T18:04:21.076254847-04:00
+LastUpdated: 2026-10-18T23:17:32.05284209-04:00
 WhatFor: ""
 WhenToUse: ""
 ---

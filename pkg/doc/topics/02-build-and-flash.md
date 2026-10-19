@@ -54,7 +54,9 @@ and fail later, so loading it is a decision you make explicitly.
 Under `weft serve` the Lab gets a **Hardware** tab (it stays hidden on claude.ai, where there is no
 backend). *Build* and *Build and load* compile the editor's design for the A1-EVB in the page, send the
 bundle to the server, and stream the stages and tool output back; the tab then puts the Lab's estimate
-next to nextpnr's utilization and fmax. Builds from the tab and from `weft build` share
+next to nextpnr's utilization and fmax. The estimate covers the design's own graph: the native-cell cores
+and the HIL bridge (about 1,170–1,450 LUT sites) are not in it, so a `--hil` build places far more than
+it estimates. Builds from the tab and from `weft build` share
 `var/weft/builds/`, so either can load the other's.
 
 The Lab's agent sees the same thing as `hw`: `hw.build()` returns a build id at once, and

@@ -63,3 +63,7 @@ P8 (134b04c): board-level validation. weft build --hil adds the weft_hil bridge 
 - /home/manuel/code/wesen/2026-10-18--weft/pkg/doc/topics/04-board-session.md — Help topic board-session
 - /home/manuel/code/wesen/2026-10-18--weft/pkg/hw/session.go — Board sessions
 - /home/manuel/code/wesen/2026-10-18--weft/weft-lab/app/src/core/hwscenario.js — Scenarios on the board
+
+## 2026-10-18
+
+Closed: P1–P8 done; project report in go-go-parc (764c6f2); help topics corrected for input latency and bridge cost; repository published as github.com/wesen/2026-10-18--weft

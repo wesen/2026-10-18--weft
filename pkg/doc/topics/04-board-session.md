@@ -54,7 +54,9 @@ The bridge (`hdl/hil/weft_hil.v`, built into `weft`) sits next to the design in 
   value directly. Both pass the usual synchronizer in their domain.
 - **Reset**: the host's reset holds the design's reset for 5 cycles, so a scenario starts from the same
   state as in the simulator.
-- **Cost**: about 430 flip-flops and one `CC_BRAM_40K` for the report queue, plus `uart.tx` and `uart.rx`.
+- **Cost**: about 1,170–1,450 LUT sites, 380–450 flip-flops and one `CC_BRAM_40K` for the report queue,
+  plus `uart.tx` and `uart.rx`. It also lowers fmax (F-01: 87.46 → 58.75 MHz; F-05: 41.35 → 36.67 MHz),
+  still far above 10 MHz. The Lab's estimate covers only the design, not the bridge.
 
 ## The protocol
 
@@ -94,8 +96,11 @@ from its reset state.
 
 - `wait("1.1s")` waits for 11,000,000 board cycles at 10 MHz, not for 1.1 s of the host's time.
 - `press`, `release`, `toggle` and `set` send an `I` command. The input changes at the cycle the bridge
-  acknowledges, a millisecond or two after the step because of USB. A press of 100 ms holds for 100 ms of
-  board cycles from that acknowledgement. A `bounce` option is ignored: each input change is one command,
+  acknowledges. That is about 7.5 ms of board time after the previous step ended: the runner first confirms
+  the board has passed that step (`T`), then the command goes from Node over HTTP to serve, over USB and
+  the UART, and its `A` comes back. A press of 100 ms holds for 100 ms of board cycles from that
+  acknowledgement, and every later step is timed from it, so the delay only matters to a scenario that
+  expects an output within a few milliseconds of an input. A `bounce` option is ignored: each input change is one command,
   with no chatter.
 - `expectPins` and `expectToggles` read the output history the bridge reported. With `within`, they pass
   if the value is right at any change up to that much later. Toggle counts start at the reset.

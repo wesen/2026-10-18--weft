@@ -1188,3 +1188,34 @@ with real timing, from the CLI, the Lab and the agent.
   `20 + NH` characters for O (NH = hex digits of the outputs), 19 for A/E/H, 9 for X.
 - Session view: `{session, build, design, mode, hil: {baud, hz, tx, rx, inputs, outputs}, openedAt, state:
   {epoch, cycle, outs, inputs, overrides, changes, lost, gaps}}`.
+
+## Step 11: Project report, doc corrections, close the ticket, publish the repository
+
+The project report went to the go-go-parc vault, together with both books and an FPGA/HDL/GateMate map of
+content. Writing it surfaced two statements in the help topics that the measurements contradict; both are
+corrected here. The ticket is closed, and the repository is published as a public GitHub repository.
+
+### Prompt Context
+**User prompt (verbatim):** "close the ticket, create a public repo on github, push"
+**Assistant interpretation:** Finish the close-out (the two doc corrections proposed as step 1), close
+WEFT-001, create `wesen/2026-10-18--weft` (the Go module path) as a public repository and push `main`.
+**Inferred user intent:** Make the finished project public and leave the ticket in a closed state.
+
+### Evidence and commits
+- Vault: go-go-parc `764c6f2` — `Projects/2026/10/18/PROJECT REPORT - Weft Lab on Real Hardware - …md`,
+  the two `ARTICLE - Textbook - …` notes, `Research/KB/Projects/fpga-hdl-gatemate.md`, backlinks.
+- `pkg/doc/topics/04-board-session.md`: an input step lands about 7.5 ms of board time after the previous
+  step (measured 7.47–7.7 ms in the F-05 run), not "a millisecond or two"; the bridge costs about
+  1,170–1,450 LUT sites and 380–450 flip-flops and lowers fmax (F-01 87.46 → 58.75 MHz, F-05 41.35 →
+  36.67 MHz). `02-build-and-flash.md`: the Lab's estimate excludes the cores and the bridge.
+- `GOWORK=off go test ./pkg/doc -count=1` passes; `weft help board-session` shows the new text.
+- Pre-publication audit of the 319 tracked files: no secret patterns (keys, tokens, private keys), no email
+  addresses, no env files; largest file 824 KB. The francois-derived code comes from
+  `github.com/go-go-golems/francois`, which is public under the MIT license.
+
+### Noteworthy decisions or failures
+- The repository has no LICENSE file; choosing one is left to the owner.
+
+### Remaining requirements and next action
+- N/A for WEFT-001. Proposed follow-ups (not tickets yet): a `weft validate --all` regression sweep that
+  also calibrates the GateMate estimate, and a timed input queue in the bridge.
